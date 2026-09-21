@@ -24,6 +24,7 @@ def test_runtime_settings_use_external_kafka_env(monkeypatch):
     monkeypatch.setenv("GCS_BUCKET_URI", "gs://bucket/chzzk/local")
     monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
     monkeypatch.setenv("KAFKA_TOPIC", "custom.topic")
+    monkeypatch.setenv("KAFKA_STARTING_OFFSETS", "earliest")
     monkeypatch.setenv("SPARK_APP_NAME", "custom-app")
 
     settings = module.load_runtime_settings()
@@ -31,6 +32,7 @@ def test_runtime_settings_use_external_kafka_env(monkeypatch):
     assert settings.spark_app_name == "custom-app"
     assert settings.kafka_bootstrap_servers == "kafka:9092"
     assert settings.kafka_topic == "custom.topic"
+    assert settings.kafka_starting_offsets == "earliest"
     assert settings.output_path == "gs://bucket/chzzk/local/bronze"
     assert settings.dead_letter_path == "gs://bucket/chzzk/local/dead_letter"
     assert settings.checkpoint_path == "gs://bucket/chzzk/local/checkpoint"

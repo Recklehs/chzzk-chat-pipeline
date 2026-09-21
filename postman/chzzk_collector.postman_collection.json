@@ -6,24 +6,7 @@
     "description": "CHZZK 수집기 제어 API (채널 추가/삭제/조회/통계)"
   },
   "auth": {
-    "type": "apikey",
-    "apikey": [
-      {
-        "key": "key",
-        "value": "X-API-Key",
-        "type": "string"
-      },
-      {
-        "key": "value",
-        "value": "{{apiKey}}",
-        "type": "string"
-      },
-      {
-        "key": "in",
-        "value": "header",
-        "type": "string"
-      }
-    ]
+    "type": "noauth"
   },
   "item": [
     {

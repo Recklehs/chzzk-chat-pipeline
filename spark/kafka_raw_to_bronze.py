@@ -2,7 +2,6 @@ import os
 import signal
 import sys
 from dataclasses import dataclass, field
-from functools import partial
 from pathlib import Path
 
 try:
@@ -17,9 +16,9 @@ except ModuleNotFoundError:  # pragma: no cover
 
 READY_LINE = "SPARK_BRONZE_READY"
 DEFAULT_APP_NAME = "chzzk-kafka-raw-to-bronze"
-DEFAULT_OUTPUT_PATH = "data/output/chat_bdy_stream"
-DEFAULT_DEAD_LETTER_PATH = "data/output/dead_letter/chat_bdy_stream"
-DEFAULT_CHECKPOINT_PATH = "data/checkpoints/chat_bdy_stream"
+DEFAULT_OUTPUT_PATH = "data/output/frames/bronze"
+DEFAULT_DEAD_LETTER_PATH = "data/output/frames/dead_letter"
+DEFAULT_CHECKPOINT_PATH = "data/output/frames/checkpoint"
 GCS_CONNECTOR_PACKAGE = "com.google.cloud.bigdataoss:gcs-connector:4.0.1:shaded"
 GCS_FILESYSTEM_IMPL = "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem"
 GCS_ABSTRACT_FILESYSTEM_IMPL = "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFS"
@@ -37,6 +36,7 @@ class RuntimeSettings:
     spark_app_name: str = DEFAULT_APP_NAME
     kafka_bootstrap_servers: str = "localhost:9092"
     kafka_topic: str = "chzzk.events.raw"
+    kafka_starting_offsets: str = "latest"
     output_path: str = DEFAULT_OUTPUT_PATH
     dead_letter_path: str = DEFAULT_DEAD_LETTER_PATH
     checkpoint_path: str = DEFAULT_CHECKPOINT_PATH
@@ -93,6 +93,7 @@ def _load_runtime_settings_from_properties(properties_path: str | Path) -> Runti
         spark_app_name=job_config.app_name or DEFAULT_APP_NAME,
         kafka_bootstrap_servers=job_config.kafka_bootstrap_servers,
         kafka_topic=job_config.kafka_topic,
+        kafka_starting_offsets=job_config.kafka_starting_offsets,
         output_path=job_config.bronze_path,
         dead_letter_path=job_config.dead_letter_path,
         checkpoint_path=job_config.checkpoint_path,
@@ -118,49 +119,12 @@ def load_runtime_settings(argv: list[str] | None = None) -> RuntimeSettings:
         spark_app_name=os.environ.get("SPARK_APP_NAME", DEFAULT_APP_NAME),
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
         kafka_topic=os.environ.get("KAFKA_TOPIC", "chzzk.events.raw"),
+        kafka_starting_offsets=os.environ.get("KAFKA_STARTING_OFFSETS", "latest"),
         output_path=output_path,
         dead_letter_path=dead_letter_path,
         checkpoint_path=checkpoint_path,
         google_application_credentials=os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"),
         processing_time=os.environ.get("SPARK_BRONZE_PROCESSING_TIME", "30 seconds"),
-    )
-
-
-def build_schema():
-    from pyspark.sql.types import ArrayType, IntegerType, LongType, StringType, StructField, StructType
-
-    return StructType(
-        [
-            StructField("svcid", StringType(), True),
-            StructField("ver", StringType(), True),
-            StructField("cmd", IntegerType(), True),
-            StructField("tid", StringType(), True),
-            StructField("cid", StringType(), True),
-            StructField(
-                "bdy",
-                ArrayType(
-                    StructType(
-                        [
-                            StructField("svcid", StringType(), True),
-                            StructField("cid", StringType(), True),
-                            StructField("mbrCnt", IntegerType(), True),
-                            StructField("uid", StringType(), True),
-                            StructField("profile", StringType(), True),
-                            StructField("msg", StringType(), True),
-                            StructField("msgTypeCode", IntegerType(), True),
-                            StructField("msgStatusType", StringType(), True),
-                            StructField("extras", StringType(), True),
-                            StructField("ctime", LongType(), True),
-                            StructField("utime", LongType(), True),
-                            StructField("msgTid", StringType(), True),
-                            StructField("cuid", StringType(), True),
-                            StructField("msgTime", LongType(), True),
-                        ]
-                    )
-                ),
-                True,
-            ),
-        ]
     )
 
 
@@ -207,134 +171,26 @@ def create_spark_session(settings: RuntimeSettings | None = None):
 
 
 def create_stage_df(spark, settings: RuntimeSettings):
-    from pyspark.sql import functions as F
-
     return (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", settings.kafka_bootstrap_servers)
         .option("subscribe", settings.kafka_topic)
-        .option("startingOffsets", "latest")
+        .option("startingOffsets", settings.kafka_starting_offsets)
         .load()
-        .select(
-            F.col("topic"),
-            F.col("partition"),
-            F.col("offset"),
-            F.col("timestamp").alias("kafka_timestamp"),
-            F.col("key").cast("string").alias("raw_key"),
-            F.col("value").cast("string").alias("raw_json"),
-        )
     )
-
-
-def write_main_and_dead_letter(batch_df, batch_id, *, schema, settings: RuntimeSettings):
-    from pyspark.sql import functions as F
-
-    parsed_batch = (
-        batch_df.withColumn("parsed", F.from_json(F.col("raw_json"), schema))
-        .withColumn("event_date", F.to_date("kafka_timestamp"))
-        .withColumn("batch_id", F.lit(batch_id))
-        .persist()
-    )
-
-    try:
-        good_base = (
-            parsed_batch.filter(F.col("parsed").isNotNull())
-            .filter(F.col("parsed.bdy").isNotNull())
-            .filter(F.size(F.col("parsed.bdy")) > 0)
-        )
-        good_batch = (
-            good_base.select(
-                "topic",
-                "partition",
-                "offset",
-                "kafka_timestamp",
-                "event_date",
-                "batch_id",
-                "raw_key",
-                "raw_json",
-                F.col("parsed.svcid").alias("svcid"),
-                F.col("parsed.ver").alias("ver"),
-                F.col("parsed.cmd").alias("cmd"),
-                F.col("parsed.tid").alias("tid"),
-                F.col("parsed.cid").alias("cid"),
-                F.explode(F.col("parsed.bdy")).alias("body"),
-            ).select(
-                "topic",
-                "partition",
-                "offset",
-                "kafka_timestamp",
-                "event_date",
-                "batch_id",
-                "raw_json",
-                F.col("raw_key").alias("channel_id"),
-                "svcid",
-                "ver",
-                "cmd",
-                "tid",
-                "cid",
-                F.col("body.svcid").alias("body_svcid"),
-                F.col("body.cid").alias("body_cid"),
-                F.col("body.mbrCnt").alias("mbr_cnt"),
-                F.col("body.uid").alias("uid"),
-                F.col("body.profile").alias("profile_json"),
-                F.col("body.msg").alias("msg"),
-                F.col("body.msgTypeCode").alias("msg_type_code"),
-                F.col("body.msgStatusType").alias("msg_status_type"),
-                F.col("body.extras").alias("extras_json"),
-                F.col("body.ctime").alias("ctime"),
-                F.col("body.utime").alias("utime"),
-                F.col("body.msgTid").alias("msg_tid"),
-                F.col("body.cuid").alias("cuid"),
-                F.col("body.msgTime").alias("msg_time"),
-            )
-        )
-
-        dead_json_batch = parsed_batch.filter(F.col("parsed").isNull()).select(
-            "topic",
-            "partition",
-            "offset",
-            "kafka_timestamp",
-            "event_date",
-            "batch_id",
-            "raw_key",
-            "raw_json",
-            F.lit("json_parse_failed").alias("dead_letter_reason"),
-            F.current_timestamp().alias("dead_letter_at"),
-        )
-
-        dead_bdy_batch = (
-            parsed_batch.filter(F.col("parsed").isNotNull())
-            .filter(F.col("parsed.bdy").isNull() | (F.size(F.col("parsed.bdy")) == 0))
-            .select(
-                "topic",
-                "partition",
-                "offset",
-                "kafka_timestamp",
-                "event_date",
-                "batch_id",
-                "raw_key",
-                "raw_json",
-                F.lit("bdy_missing_or_empty").alias("dead_letter_reason"),
-                F.current_timestamp().alias("dead_letter_at"),
-            )
-        )
-
-        good_batch.write.format("delta").mode("append").partitionBy("event_date").save(settings.output_path)
-        dead_json_batch.write.format("delta").mode("append").partitionBy("event_date").save(settings.dead_letter_path)
-        dead_bdy_batch.write.format("delta").mode("append").partitionBy("event_date").save(settings.dead_letter_path)
-    finally:
-        parsed_batch.unpersist()
 
 
 def create_streaming_query(spark, settings: RuntimeSettings):
-    schema = build_schema()
-    stage_df = create_stage_df(spark, settings)
-    batch_writer = partial(write_main_and_dead_letter, schema=schema, settings=settings)
+    from spark.job import transform_raw_messages
+
+    frames = transform_raw_messages(create_stage_df(spark, settings))
     return (
-        stage_df.writeStream.foreachBatch(batch_writer)
+        frames.writeStream.format("delta")
+        .outputMode("append")
+        .partitionBy("event_date")
         .option("checkpointLocation", settings.checkpoint_path)
         .trigger(processingTime=settings.processing_time)
-        .start()
+        .start(settings.output_path)
     )
 
 

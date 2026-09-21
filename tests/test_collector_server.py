@@ -1,15 +1,16 @@
 import asyncio
 import importlib
 import json
-import os
 import sys
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from websockets.exceptions import ConnectionClosedOK
 
 
 def load_collector_module():
-    os.environ["API_KEY"] = "test-key"
     sys.modules.pop("chzzk_collector_server", None)
     return importlib.import_module("chzzk_collector_server")
 
@@ -201,6 +202,109 @@ def test_receive_messages_stops_when_kafka_publish_fails():
     assert websocket.recv_calls == 1
     assert stats["total_collected_count"] == 0
     assert stats["per_channel"] == {}
+
+
+@pytest.mark.parametrize("ret_code", [0, 403, None])
+def test_connection_ack_records_sqlite_session_without_publishing(tmp_path, ret_code):
+    collector = load_collector_module()
+    store = collector.ChannelStore(str(tmp_path / "control.db"))
+    counter = collector.CmdCounter()
+    publisher = FakeRawPublisher()
+    last_chat_time = {"value": 0.0}
+    ack = {"cmd": 10100, "retCode": ret_code, "bdy": {"sid": "test-session", "auth": "READ"}}
+    chat = make_single_message("hello")
+    websocket = FakeWebSocket([json.dumps(ack), json.dumps(ack), json.dumps(chat)])
+
+    def on_connected():
+        store.start_monitoring_session("channel-1", "streamer")
+
+    receive = collector.receive_messages(
+        websocket, "channel-1", "streamer", counter, last_chat_time, publisher,
+        on_connected=on_connected,
+    )
+    if ret_code == 0:
+        asyncio.run(receive)
+        sessions = store.list_monitoring_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].channel_id == "channel-1"
+        assert sessions[0].started_at is not None
+        assert [payload for _, payload, _ in publisher.calls] == [chat]
+        assert asyncio.run(counter.snapshot())["total_collected_count"] == 1
+    else:
+        with pytest.raises(RuntimeError, match="connection rejected"):
+            asyncio.run(receive)
+        assert store.list_monitoring_sessions() == []
+        assert publisher.calls == []
+        assert last_chat_time["value"] == 0.0
+
+
+@pytest.mark.parametrize("outcome", [403, None, "closed", "cancelled"])
+def test_connection_cleans_up_workers_before_exit_or_retry(monkeypatch, outcome):
+    from collector import runtime
+
+    async def scenario():
+        ready = asyncio.Event()
+        workers = set()
+        stopped = set()
+        cleanup_at_close = []
+        retries = []
+        real_sleep = asyncio.sleep
+
+        async def sleep(delay):
+            if delay in (10, 20):
+                worker = asyncio.current_task()
+                workers.add(worker)
+                if len(workers) == 2:
+                    ready.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    await real_sleep(0)
+                    stopped.add(worker)
+            elif delay == 5:
+                retries.append(workers == stopped and all(task.done() for task in workers))
+                raise asyncio.CancelledError
+            else:
+                await real_sleep(delay)
+
+        class Socket(FakeWebSocket):
+            async def send(self, message):
+                pass
+
+            async def recv(self):
+                await ready.wait()
+                if outcome == "cancelled":
+                    await asyncio.Event().wait()
+                return await super().recv()
+
+        messages = [] if outcome == "closed" else [json.dumps({"cmd": 10100, "retCode": outcome})]
+
+        @asynccontextmanager
+        async def connect(*args, **kwargs):
+            try:
+                yield Socket(messages)
+            finally:
+                cleanup_at_close.append(workers == stopped and all(task.done() for task in workers))
+
+        monkeypatch.setattr(runtime.asyncio, "sleep", sleep)
+        monkeypatch.setattr(runtime.websockets, "connect", connect)
+        monkeypatch.setattr(runtime, "get_access_token", AsyncMock(return_value="token"))
+        client = SimpleNamespace(
+            timeout_seconds=1,
+            fetch=AsyncMock(return_value=SimpleNamespace(chat_channel_id="chat-1")),
+        )
+        task = asyncio.create_task(runtime.connect_to_chzzk(
+            "channel-1", "streamer", runtime.CmdCounter(), client, FakeRawPublisher(),
+        ))
+        if outcome == "cancelled":
+            await asyncio.wait_for(ready.wait(), timeout=1)
+            task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+        assert cleanup_at_close == [True]
+        assert retries == ([] if outcome == "cancelled" else [True])
+
+    asyncio.run(scenario())
 
 
 def test_cmd_counter_recent_events_use_buckets_instead_of_per_event_deques():

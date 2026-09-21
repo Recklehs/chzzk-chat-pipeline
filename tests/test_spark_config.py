@@ -5,6 +5,24 @@ import pytest
 from spark.config import derive_storage_paths, load_job_config, parse_properties_file, resolve_properties_path
 
 
+def test_local_profile_loads_without_cloud_configuration():
+    from spark.kafka_raw_to_bronze import load_runtime_settings
+
+    path = Path(__file__).resolve().parents[1] / "spark/conf/local.properties"
+    settings = load_runtime_settings(["--properties-file", str(path)])
+
+    assert settings.output_path == "data/output/local/frames/bronze"
+    assert settings.dead_letter_path == "data/output/local/frames/dead_letter"
+    assert settings.checkpoint_path == "data/output/local/frames/checkpoint"
+    assert settings.kafka_starting_offsets == "earliest"
+    assert not settings.uses_gcs()
+    assert not any("fs.gs." in key for key in settings.spark_properties)
+    assert "gcs-connector" not in settings.spark_properties.get("spark.jars.packages", "")
+    # spark-submit resolves its JVM classpath before the Python session builder runs.
+    packages = settings.spark_properties["spark.jars.packages"].split(",")
+    assert "org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1" in packages
+
+
 def test_parse_properties_file_skips_comments_and_blank_lines(tmp_path):
     properties_file = tmp_path / "local.properties"
     properties_file.write_text(

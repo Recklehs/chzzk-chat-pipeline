@@ -227,7 +227,6 @@ def test_async_main_passes_kafka_batching_settings_to_benchmark_publisher(monkey
     monkeypatch.setattr(module, "KafkaRawPublisher", CapturingKafkaRawPublisher)
     monkeypatch.setattr(module, "run_replay", fake_run_replay)
     monkeypatch.setattr(module, "start_metrics_http_server", lambda *args, **kwargs: None)
-    monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("EVENT_BUS_BACKEND", "kafka")
     monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     monkeypatch.setenv("KAFKA_TOPIC", "chzzk.events.raw.benchmark")

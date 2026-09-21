@@ -1,6 +1,5 @@
 import asyncio
 import importlib
-import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -12,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def load_collector_module():
-    os.environ["API_KEY"] = "test-key"
     sys.modules.pop("chzzk_control", None)
     sys.modules.pop("chzzk_collector_server", None)
     return importlib.import_module("chzzk_collector_server")
@@ -46,9 +44,10 @@ class FakeMonitorTaskFactory:
         self.cancelled = []
         self.raw_publishers = []
 
-    async def __call__(self, channel_id, streamer_nickname, counter, live_status_client=None, raw_publisher=None):
+    async def __call__(self, channel_id, streamer_nickname, counter, live_status_client=None, raw_publisher=None, on_connected=None):
         self.started.append((channel_id, streamer_nickname))
         self.raw_publishers.append(raw_publisher)
+        on_connected()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -60,8 +59,9 @@ class CompletingMonitorTaskFactory:
     def __init__(self):
         self.started = []
 
-    async def __call__(self, channel_id, streamer_nickname, counter, live_status_client=None, raw_publisher=None):
+    async def __call__(self, channel_id, streamer_nickname, counter, live_status_client=None, raw_publisher=None, on_connected=None):
         self.started.append((channel_id, streamer_nickname))
+        on_connected()
         return
 
 
@@ -94,7 +94,6 @@ class RecordingJsonCache:
 
 def make_settings(collector, tmp_path):
     return collector.AppSettings(
-        api_key="test-key",
         event_bus_backend="pubsub",
         kafka_bootstrap_servers="localhost:9092",
         pubsub_project_id="demo-project",
@@ -103,7 +102,6 @@ def make_settings(collector, tmp_path):
         chzzk_api_timeout_seconds=5,
         chzzk_live_poll_seconds=15,
         control_db_path=str(tmp_path / "control.db"),
-        session_secret_key="session-secret",
         dashboard_refresh_seconds=5,
     )
 
@@ -207,14 +205,13 @@ def test_channel_registration_toggle_and_dashboard_state(tmp_path):
                 "channel_input": "https://chzzk.naver.com/live/channel-open",
                 "alias": "Open Channel",
             },
-            headers={"X-API-Key": "test-key"},
         )
         assert add_response.status_code == 202
         assert monitor_factory.started == [("channel-open", "공식 오픈 채널")]
         assert len(monitor_factory.raw_publishers) == 1
         assert monitor_factory.raw_publishers[0] is not None
 
-        list_response = client.get("/channels", headers={"X-API-Key": "test-key"})
+        list_response = client.get("/channels")
         assert list_response.status_code == 200
         body = list_response.json()
         assert body["monitoring_count"] == 1
@@ -227,15 +224,10 @@ def test_channel_registration_toggle_and_dashboard_state(tmp_path):
         assert body["channels"][0]["live_status"] == "OPEN"
         assert body["channels"][0]["monitoring_status"] == "monitoring"
 
-        unauthorized_state = client.get("/dashboard/api/state")
-        assert unauthorized_state.status_code == 401
-
-        login_response = client.post("/dashboard/session", data={"api_key": "test-key"})
-        assert login_response.status_code == 200
-
         dashboard_response = client.get("/dashboard")
         assert dashboard_response.status_code == 200
-        assert "CHZZK Monitoring Dashboard" in dashboard_response.text
+        assert 'id="channel-form"' in dashboard_response.text
+        assert "set-cookie" not in dashboard_response.headers
 
         state_response = client.get("/dashboard/api/state")
         assert state_response.status_code == 200
@@ -249,29 +241,13 @@ def test_channel_registration_toggle_and_dashboard_state(tmp_path):
         disable_response = client.patch(
             "/channels/channel-open/enabled",
             json={"enabled": False},
-            headers={"X-API-Key": "test-key"},
         )
         assert disable_response.status_code == 200
         assert monitor_factory.cancelled == ["channel-open"]
 
-        disabled_channels = client.get("/channels", headers={"X-API-Key": "test-key"}).json()
+        disabled_channels = client.get("/channels").json()
         assert disabled_channels["channels"][0]["enabled"] is False
         assert disabled_channels["channels"][0]["monitoring_status"] == "disabled"
-
-
-def test_dashboard_login_accepts_multipart_form_submission(tmp_path):
-    collector = load_collector_module()
-    live_client = FakeLiveStatusClient({})
-    monitor_factory = FakeMonitorTaskFactory()
-
-    with create_test_client(collector, tmp_path, live_client, monitor_factory) as client:
-        response = client.post(
-            "/dashboard/session",
-            files={"api_key": (None, "test-key")},
-        )
-
-        assert response.status_code == 200
-        assert response.json() == {"authenticated": True}
 
 
 def test_dashboard_state_uses_realtime_redis_cache_key(tmp_path):
@@ -290,12 +266,43 @@ def test_dashboard_state_uses_realtime_redis_cache_key(tmp_path):
     app.state.redis_cache = cache
 
     with TestClient(app) as client:
-        client.post("/dashboard/session", data={"api_key": "test-key"})
         response = client.get("/dashboard/api/state", params={"window": "60s"})
 
     assert response.status_code == 200
     assert cache.calls == [("chat:dashboard:realtime:window=60s", 10)]
     assert response.json()["refresh_seconds"] == 5
+
+
+def test_monitoring_session_waits_for_connection_success(tmp_path):
+    collector = load_collector_module()
+
+    async def scenario():
+        callbacks = []
+
+        async def monitor(channel_id, nickname, counter, live_client, publisher, on_connected):
+            callbacks.append(on_connected)
+            await asyncio.Event().wait()
+
+        store = collector.ChannelStore(str(tmp_path / "control.db"))
+        channel = store.upsert_channel("channel-open", "Open Channel", True)
+        coordinator = collector.MonitorCoordinator(
+            store=store,
+            live_status_client=FakeLiveStatusClient({}),
+            raw_publisher=FakeRawPublisher(),
+            counter=collector.CmdCounter(),
+            poll_interval_seconds=15,
+            monitor_task_factory=monitor,
+        )
+        try:
+            await coordinator.ensure_monitoring(channel)
+            assert store.list_monitoring_sessions() == []
+            callbacks[0]()
+            assert len(store.list_monitoring_sessions()) == 1
+            assert store.get_open_monitoring_session("channel-open") is not None
+        finally:
+            await coordinator.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_channel_registration_records_monitoring_session_and_disable_closes_with_manual_stop(tmp_path):
@@ -315,7 +322,6 @@ def test_channel_registration_records_monitoring_session_and_disable_closes_with
         response = client.post(
             "/channels",
             params={"channel_input": "channel-open", "alias": "Open Channel"},
-            headers={"X-API-Key": "test-key"},
         )
         assert response.status_code == 202
 
@@ -333,7 +339,6 @@ def test_channel_registration_records_monitoring_session_and_disable_closes_with
         response = client.patch(
             "/channels/channel-open/enabled",
             json={"enabled": False},
-            headers={"X-API-Key": "test-key"},
         )
         assert response.status_code == 200
 
@@ -362,14 +367,12 @@ def test_delete_channel_closes_monitoring_session_with_channel_removed(tmp_path)
         response = client.post(
             "/channels",
             params={"channel_input": "channel-open", "alias": "Open Channel"},
-            headers={"X-API-Key": "test-key"},
         )
         assert response.status_code == 202
 
         response = client.delete(
             "/channels",
             params={"channel_id": "channel-open"},
-            headers={"X-API-Key": "test-key"},
         )
         assert response.status_code == 200
 
@@ -560,7 +563,6 @@ def test_invalid_channel_is_rejected(tmp_path):
         response = client.post(
             "/channels",
             params={"channel_input": "missing-channel"},
-            headers={"X-API-Key": "test-key"},
         )
 
     assert response.status_code == 404
@@ -584,7 +586,6 @@ def test_startup_restores_enabled_live_channels(tmp_path):
         response = client.post(
             "/channels",
             params={"channel_input": "channel-open", "alias": "Remembered Channel"},
-            headers={"X-API-Key": "test-key"},
         )
         assert response.status_code == 202
 
@@ -599,7 +600,7 @@ def test_startup_restores_enabled_live_channels(tmp_path):
     restored_monitor_factory = FakeMonitorTaskFactory()
 
     with create_test_client(collector, tmp_path, restored_live_client, restored_monitor_factory) as client:
-        channels_response = client.get("/channels", headers={"X-API-Key": "test-key"})
+        channels_response = client.get("/channels")
         assert channels_response.status_code == 200
         payload = channels_response.json()
         assert payload["monitoring_count"] == 1
@@ -627,7 +628,6 @@ def test_registration_succeeds_when_metadata_lookup_fails(tmp_path):
         response = client.post(
             "/channels",
             params={"channel_input": "channel-open", "alias": "Fallback Alias"},
-            headers={"X-API-Key": "test-key"},
         )
 
         assert response.status_code == 202

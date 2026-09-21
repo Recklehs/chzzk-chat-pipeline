@@ -20,7 +20,6 @@ def load_publisher_module():
 
 def make_settings(control_module, *, backend="pubsub"):
     return control_module.AppSettings(
-        api_key="test-key",
         event_bus_backend=backend,
         kafka_bootstrap_servers="localhost:9092",
         kafka_topic="chzzk.events.raw",
@@ -30,10 +29,10 @@ def make_settings(control_module, *, backend="pubsub"):
     )
 
 
-def test_load_settings_defaults_to_pubsub_and_uses_google_cloud_project(monkeypatch):
+def test_load_settings_defaults_to_kafka_and_uses_google_cloud_project(monkeypatch):
     module = load_config_module()
     monkeypatch.setattr(module, "load_runtime_env", lambda: None)
-    monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.delenv("API_KEY", raising=False)
     monkeypatch.delenv("EVENT_BUS_BACKEND", raising=False)
     monkeypatch.delenv("PUBSUB_PROJECT_ID", raising=False)
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "fallback-project")
@@ -41,16 +40,25 @@ def test_load_settings_defaults_to_pubsub_and_uses_google_cloud_project(monkeypa
 
     settings = module.load_settings_from_env()
 
-    assert settings.event_bus_backend == "pubsub"
+    assert settings.event_bus_backend == "kafka"
     assert settings.pubsub_project_id == "fallback-project"
     assert settings.pubsub_raw_topic == "raw-topic"
     assert settings.metrics_enabled is False
 
 
+def test_default_settings_build_kafka_publisher_without_cloud_configuration():
+    from collector.control import AppSettings
+    from collector.event_bus import normalize_event_bus_backend
+    from collector.publisher import KafkaRawPublisher, build_default_raw_publisher
+
+    assert isinstance(build_default_raw_publisher(AppSettings()), KafkaRawPublisher)
+    for value in (None, "", "  "):
+        assert normalize_event_bus_backend(value) == "kafka"
+
+
 def test_load_settings_enables_metrics_from_env(monkeypatch):
     module = load_config_module()
     monkeypatch.setattr(module, "load_runtime_env", lambda: None)
-    monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("EVENT_BUS_BACKEND", "kafka")
     monkeypatch.setenv("METRICS_ENABLED", "true")
 
@@ -62,7 +70,6 @@ def test_load_settings_enables_metrics_from_env(monkeypatch):
 def test_load_settings_reads_kafka_producer_batching_options(monkeypatch):
     module = load_config_module()
     monkeypatch.setattr(module, "load_runtime_env", lambda: None)
-    monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("EVENT_BUS_BACKEND", "kafka")
     monkeypatch.setenv("KAFKA_PRODUCER_LINGER_MS", "20")
     monkeypatch.setenv("KAFKA_PRODUCER_MAX_BATCH_SIZE", "65536")
@@ -76,7 +83,6 @@ def test_load_settings_reads_kafka_producer_batching_options(monkeypatch):
 def test_load_settings_reads_live_poll_max_interval(monkeypatch):
     module = load_config_module()
     monkeypatch.setattr(module, "load_runtime_env", lambda: None)
-    monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("CHZZK_LIVE_POLL_SECONDS", "15")
     monkeypatch.setenv("CHZZK_LIVE_POLL_MAX_SECONDS", "60")
 
@@ -89,7 +95,6 @@ def test_load_settings_reads_live_poll_max_interval(monkeypatch):
 def test_load_settings_reads_kafka_producer_compression_option(monkeypatch):
     module = load_config_module()
     monkeypatch.setattr(module, "load_runtime_env", lambda: None)
-    monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("EVENT_BUS_BACKEND", "kafka")
     monkeypatch.setenv("KAFKA_PRODUCER_COMPRESSION_TYPE", "lz4")
 
@@ -101,7 +106,6 @@ def test_load_settings_reads_kafka_producer_compression_option(monkeypatch):
 def test_load_settings_rejects_invalid_event_bus_backend(monkeypatch):
     module = load_config_module()
     monkeypatch.setattr(module, "load_runtime_env", lambda: None)
-    monkeypatch.setenv("API_KEY", "test-key")
     monkeypatch.setenv("EVENT_BUS_BACKEND", "invalid")
 
     with pytest.raises(ValueError, match="Unsupported EVENT_BUS_BACKEND"):
@@ -123,7 +127,6 @@ def test_build_default_raw_publisher_passes_kafka_batching_options():
     control_module = importlib.import_module("collector.control")
     publisher_module = load_publisher_module()
     settings = control_module.AppSettings(
-        api_key="test-key",
         event_bus_backend="kafka",
         kafka_bootstrap_servers="localhost:9092",
         kafka_topic="chzzk.events.raw",

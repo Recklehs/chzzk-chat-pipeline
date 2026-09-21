@@ -49,14 +49,6 @@
             margin: 8px 0 0;
             color: var(--muted);
         }
-        .logout {
-            border: 1px solid var(--line);
-            border-radius: 999px;
-            padding: 10px 16px;
-            background: rgba(255,255,255,0.7);
-            cursor: pointer;
-            font-weight: 700;
-        }
         .grid {
             display: grid;
             gap: 18px;
@@ -198,7 +190,6 @@
             <h1>CHZZK Monitoring Dashboard</h1>
             <p>등록 채널의 방송 상태와 수집 상태를 한 화면에서 제어합니다.</p>
         </div>
-        <button class="logout" id="logout-button" type="button">로그아웃</button>
     </section>
 
     <section class="grid summary-grid" id="summary-grid"></section>
@@ -264,7 +255,6 @@
     const cmdList = document.getElementById("cmd-list");
     const form = document.getElementById("channel-form");
     const formHint = document.getElementById("form-hint");
-    const logoutButton = document.getElementById("logout-button");
 
     function escapeHtml(value) {
         return String(value ?? "")
@@ -369,10 +359,6 @@
 
     async function loadState() {
         const response = await fetch("/dashboard/api/state");
-        if (response.status === 401) {
-            window.location.reload();
-            return;
-        }
         const payload = await response.json();
         renderSummary(payload.summary);
         renderCmdCounts(payload.collected_cmds);
@@ -440,14 +426,8 @@
         await loadState();
     }
 
-    async function logout() {
-        await fetch("/dashboard/session", { method: "DELETE" });
-        window.location.reload();
-    }
-
     form.addEventListener("submit", submitChannel);
     channelsBody.addEventListener("click", handleTableAction);
-    logoutButton.addEventListener("click", logout);
 
     loadState();
     setInterval(loadState, refreshSeconds * 1000);

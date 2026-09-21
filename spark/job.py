@@ -1,38 +1,6 @@
 from pyspark.sql import functions as F
-from pyspark.sql.types import ArrayType, IntegerType, LongType, StringType, StructField, StructType
 
 from spark.session import create_spark_session
-
-BODY_ITEM_SCHEMA = StructType(
-    [
-        StructField("svcid", StringType(), True),
-        StructField("cid", StringType(), True),
-        StructField("mbrCnt", IntegerType(), True),
-        StructField("uid", StringType(), True),
-        StructField("profile", StringType(), True),
-        StructField("msg", StringType(), True),
-        StructField("msgTypeCode", IntegerType(), True),
-        StructField("msgStatusType", StringType(), True),
-        StructField("extras", StringType(), True),
-        StructField("ctime", LongType(), True),
-        StructField("utime", LongType(), True),
-        StructField("msgTid", StringType(), True),
-        StructField("cuid", StringType(), True),
-        StructField("msgTime", LongType(), True),
-        StructField("cmd", IntegerType(), True),
-    ]
-)
-
-RAW_MESSAGE_SCHEMA = StructType(
-    [
-        StructField("svcid", StringType(), True),
-        StructField("ver", StringType(), True),
-        StructField("cmd", IntegerType(), True),
-        StructField("tid", StringType(), True),
-        StructField("cid", StringType(), True),
-        StructField("bdy", ArrayType(BODY_ITEM_SCHEMA), True),
-    ]
-)
 
 
 def build_source_dataframe(spark, job_config):
@@ -47,16 +15,19 @@ def build_source_dataframe(spark, job_config):
 
 
 def transform_raw_messages(raw_kafka_df):
-    return raw_kafka_df.select(
+    """Keep one original frame per row; event-specific parsing belongs in Silver."""
+    frames = raw_kafka_df.select(
         F.col("topic"),
         F.col("partition"),
         F.col("offset"),
         F.col("timestamp").alias("kafka_timestamp"),
-        F.col("key").cast("string").alias("kafka_key"),
-        F.col("value").cast("string").alias("raw_json"),
-        F.from_json(F.col("value").cast("string"), RAW_MESSAGE_SCHEMA).alias("parsed"),
+        F.col("key").cast("string").alias("channel_id"),
+        F.col("value").cast("string").alias("payload_json"),
         F.current_timestamp().alias("ingested_at"),
-    )
+        F.to_date("timestamp").alias("event_date"),
+    ).withColumn("cmd", F.get_json_object("payload_json", "$.cmd").try_cast("int"))
+    # Old Kafka records can still contain connection acknowledgements.
+    return frames.filter(F.col("cmd").isNull() | (F.col("cmd") != 10100))
 
 
 def write_bronze_stream(message_df, job_config):
@@ -64,6 +35,7 @@ def write_bronze_stream(message_df, job_config):
         message_df.writeStream
         .format("delta")
         .outputMode("append")
+        .partitionBy("event_date")
         .option("checkpointLocation", job_config.checkpoint_path)
         .start(job_config.bronze_path)
     )

@@ -16,8 +16,7 @@ def clear_runtime_env(monkeypatch):
         "APP_ENV",
         "HOST",
         "PORT",
-        "API_KEY",
-        "SESSION_SECRET_KEY",
+        "KAFKA_CLIENT_ID",
         "EVENT_BUS_BACKEND",
         "PUBSUB_PROJECT_ID",
         "PUBSUB_RAW_TOPIC",
@@ -31,7 +30,7 @@ def test_load_runtime_env_defaults_to_test_profile(tmp_path, monkeypatch):
     clear_runtime_env(monkeypatch)
     (tmp_path / ".env").write_text("HOST=127.0.0.1\nPORT=9000\n", encoding="utf-8")
     (tmp_path / ".env.test").write_text(
-        "API_KEY=test-key\nEVENT_BUS_BACKEND=pubsub\nPUBSUB_RAW_TOPIC=raw-topic\n",
+        "KAFKA_CLIENT_ID=test-client\nEVENT_BUS_BACKEND=pubsub\nPUBSUB_RAW_TOPIC=raw-topic\n",
         encoding="utf-8",
     )
 
@@ -40,7 +39,7 @@ def test_load_runtime_env_defaults_to_test_profile(tmp_path, monkeypatch):
 
     assert loaded.app_env == "test"
     assert loaded.profile_env_path == tmp_path / ".env.test"
-    assert os.environ["API_KEY"] == "test-key"
+    assert os.environ["KAFKA_CLIENT_ID"] == "test-client"
     assert runtime["host"] == "127.0.0.1"
     assert runtime["port"] == "9000"
 
@@ -49,7 +48,7 @@ def test_load_runtime_env_uses_prod_profile_when_selected(tmp_path, monkeypatch)
     clear_runtime_env(monkeypatch)
     (tmp_path / ".env").write_text("APP_ENV=prod\n", encoding="utf-8")
     (tmp_path / ".env.prod").write_text(
-        "API_KEY=prod-key\nEVENT_BUS_BACKEND=pubsub\nPUBSUB_RAW_TOPIC=raw-topic\n",
+        "KAFKA_CLIENT_ID=prod-client\nEVENT_BUS_BACKEND=pubsub\nPUBSUB_RAW_TOPIC=raw-topic\n",
         encoding="utf-8",
     )
 
@@ -57,13 +56,13 @@ def test_load_runtime_env_uses_prod_profile_when_selected(tmp_path, monkeypatch)
 
     assert loaded.app_env == "prod"
     assert loaded.profile_env_path == tmp_path / ".env.prod"
-    assert os.environ["API_KEY"] == "prod-key"
+    assert os.environ["KAFKA_CLIENT_ID"] == "prod-client"
 
 
 def test_load_runtime_env_rejects_invalid_app_env(tmp_path, monkeypatch):
     clear_runtime_env(monkeypatch)
     (tmp_path / ".env").write_text("APP_ENV=staging\n", encoding="utf-8")
-    (tmp_path / ".env.test").write_text("API_KEY=test-key\n", encoding="utf-8")
+    (tmp_path / ".env.test").write_text("KAFKA_CLIENT_ID=test-client\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Unsupported APP_ENV"):
         env_profiles.load_runtime_env(root_dir=tmp_path)
@@ -81,7 +80,7 @@ def test_collect_runtime_environment_prefers_root_event_bus_backend_kafka(tmp_pa
     clear_runtime_env(monkeypatch)
     (tmp_path / ".env").write_text("APP_ENV=test\nEVENT_BUS_BACKEND=kafka\n", encoding="utf-8")
     (tmp_path / ".env.test").write_text(
-        "API_KEY=test-key\nEVENT_BUS_BACKEND=pubsub\nPUBSUB_RAW_TOPIC=raw-topic\n",
+        "KAFKA_CLIENT_ID=test-client\nEVENT_BUS_BACKEND=pubsub\nPUBSUB_RAW_TOPIC=raw-topic\n",
         encoding="utf-8",
     )
 
@@ -94,10 +93,17 @@ def test_collect_runtime_environment_prefers_root_event_bus_backend_pubsub(tmp_p
     clear_runtime_env(monkeypatch)
     (tmp_path / ".env").write_text("APP_ENV=test\nEVENT_BUS_BACKEND=pubsub\n", encoding="utf-8")
     (tmp_path / ".env.test").write_text(
-        "API_KEY=test-key\nEVENT_BUS_BACKEND=kafka\nKAFKA_BOOTSTRAP_SERVERS=localhost:9092\n",
+        "KAFKA_CLIENT_ID=test-client\nEVENT_BUS_BACKEND=kafka\nKAFKA_BOOTSTRAP_SERVERS=localhost:9092\n",
         encoding="utf-8",
     )
 
     runtime = env_profiles.collect_runtime_environment(root_dir=tmp_path)
 
     assert runtime["event_bus_backend"] == "pubsub"
+
+
+def test_collect_runtime_environment_defaults_to_kafka_without_cloud_settings(tmp_path, monkeypatch):
+    clear_runtime_env(monkeypatch)
+    (tmp_path / ".env.test").write_text("KAFKA_CLIENT_ID=test-client\n", encoding="utf-8")
+
+    assert env_profiles.collect_runtime_environment(root_dir=tmp_path)["event_bus_backend"] == "kafka"

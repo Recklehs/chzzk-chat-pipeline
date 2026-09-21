@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from datetime import datetime
+from typing import Callable
 
 import requests
 import websockets
@@ -177,8 +178,9 @@ async def receive_messages(
     counter: CmdCounter,
     last_chat_time: dict,
     raw_publisher=None,
+    on_connected: Callable[[], None] | None = None,
 ):
-    """WebSocket으로부터 메시지를 수신하고 Kafka publish 성공분만 통계에 반영합니다."""
+    """연결 응답은 로컬에서 처리하고, 나머지는 Kafka 발행 후 통계에 반영합니다."""
     if raw_publisher is None:
         raise RuntimeError("Kafka raw publisher is required")
 
@@ -198,6 +200,13 @@ async def receive_messages(
             with metrics.time("chzzk_ws_json_parse_seconds"):
                 data = json.loads(message)
             observed_at = time.time()
+            cmd = data.get("cmd") if isinstance(data, dict) else None
+            if cmd == 10100:
+                if data.get("retCode") != 0:
+                    raise RuntimeError(f"CHZZK connection rejected: retCode={data.get('retCode')}")
+                if on_connected is not None:
+                    on_connected()
+                continue
 
             metrics.increment("chzzk_raw_publish_attempts_total", backend=backend)
             try:
@@ -209,7 +218,6 @@ async def receive_messages(
             metrics.increment("chzzk_raw_publish_success_total", backend=backend)
             metrics.observe("chzzk_ws_to_publish_ack_seconds", time.perf_counter() - frame_started_at, backend=backend)
 
-            cmd = data.get("cmd") if isinstance(data, dict) else None
             if cmd not in [100, 10000, 10001]:
                 last_chat_time["value"] = observed_at
 
@@ -243,6 +251,7 @@ async def connect_to_chzzk(
     counter,
     live_status_client: LiveStatusClient | None = None,
     raw_publisher=None,
+    on_connected: Callable[[], None] | None = None,
 ):
     """
     단일 채널에 대한 WebSocket 연결 및 자동 재연결을 관리합니다.
@@ -299,11 +308,25 @@ async def connect_to_chzzk(
                     await ws.send(json.dumps(auth_payload))
                     print(f"[{streamer_nickname}] 인증 요청 전송")
 
-                    await asyncio.gather(
-                        receive_messages(ws, channel_id, streamer_nickname, counter, last_chat_time, raw_publisher),
-                        send_ping(ws),
-                        check_inactivity(last_chat_time, streamer_nickname),
-                    )
+                    tasks = [
+                        asyncio.create_task(coro)
+                        for coro in (
+                            receive_messages(
+                                ws, channel_id, streamer_nickname, counter, last_chat_time,
+                                raw_publisher, on_connected=on_connected,
+                            ),
+                            send_ping(ws),
+                            check_inactivity(last_chat_time, streamer_nickname),
+                        )
+                    ]
+                    try:
+                        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                        for task in done:
+                            task.result()
+                    finally:
+                        for task in tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
 
             except websockets.ConnectionClosed as exc:
                 metrics.increment("chzzk_ws_reconnects_total", reason="connection_closed")

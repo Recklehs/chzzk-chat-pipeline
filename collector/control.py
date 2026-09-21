@@ -27,8 +27,7 @@ STOP_REASON_UNKNOWN = "UNKNOWN"
 
 @dataclass(frozen=True)
 class AppSettings:
-    api_key: str
-    event_bus_backend: str = "pubsub"
+    event_bus_backend: str = "kafka"
     kafka_bootstrap_servers: str = "localhost:9092"
     kafka_topic: str = "chzzk.events.raw"
     kafka_client_id: str = "chzzk-collector"
@@ -44,7 +43,6 @@ class AppSettings:
     chzzk_live_poll_seconds: float = 15
     chzzk_live_poll_max_seconds: float = 60
     control_db_path: str = "data/control.db"
-    session_secret_key: str = "change-me"
     dashboard_refresh_seconds: int = 5
     metrics_enabled: bool = False
     redis_enabled: bool = False
@@ -662,7 +660,10 @@ class CmdCounter:
             }
 
 
-MonitorTaskFactory = Callable[[str, str, CmdCounter, LiveStatusClient | None, object | None], Awaitable[None]]
+MonitorTaskFactory = Callable[
+    [str, str, CmdCounter, LiveStatusClient | None, object | None, Callable[[], None]],
+    Awaitable[None],
+]
 
 
 class MonitorCoordinator:
@@ -824,6 +825,10 @@ class MonitorCoordinator:
             return
 
         alias = channel.channel_name or channel.alias or f"unknown_{channel.channel_id[:6]}"
+
+        def on_connected():
+            self.store.start_monitoring_session(channel.channel_id, alias)
+
         task = asyncio.create_task(
             self.monitor_task_factory(
                 channel.channel_id,
@@ -831,11 +836,11 @@ class MonitorCoordinator:
                 self.counter,
                 self.live_status_client,
                 self.raw_publisher,
+                on_connected,
             )
         )
         task.add_done_callback(self._task_done_callback(channel.channel_id))
         self.tasks[channel.channel_id] = task
-        self.store.start_monitoring_session(channel.channel_id, alias)
         await asyncio.sleep(0)
 
     async def _finalize_unexpected_task_stop(self, channel_id: str):
