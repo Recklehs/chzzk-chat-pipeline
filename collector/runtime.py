@@ -202,7 +202,7 @@ async def receive_messages(
             observed_at = time.time()
             cmd = data.get("cmd") if isinstance(data, dict) else None
             if cmd == 10100:
-                if data.get("retCode") != 0:
+                if data.get("retCode") == 0:
                     raise RuntimeError(f"CHZZK connection rejected: retCode={data.get('retCode')}")
                 if on_connected is not None:
                     on_connected()
