@@ -308,14 +308,25 @@ async def connect_to_chzzk(
                     await ws.send(json.dumps(auth_payload))
                     print(f"[{streamer_nickname}] 인증 요청 전송")
 
-                    await asyncio.gather(
-                        receive_messages(
-                            ws, channel_id, streamer_nickname, counter, last_chat_time,
-                            raw_publisher, on_connected=on_connected,
-                        ),
-                        send_ping(ws),
-                        check_inactivity(last_chat_time, streamer_nickname),
-                    )
+                    tasks = [
+                        asyncio.create_task(coro)
+                        for coro in (
+                            receive_messages(
+                                ws, channel_id, streamer_nickname, counter, last_chat_time,
+                                raw_publisher, on_connected=on_connected,
+                            ),
+                            send_ping(ws),
+                            check_inactivity(last_chat_time, streamer_nickname),
+                        )
+                    ]
+                    try:
+                        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                        for task in done:
+                            task.result()
+                    finally:
+                        for task in tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
 
             except websockets.ConnectionClosed as exc:
                 metrics.increment("chzzk_ws_reconnects_total", reason="connection_closed")
