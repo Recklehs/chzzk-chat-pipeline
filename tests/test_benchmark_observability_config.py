@@ -50,7 +50,6 @@ def test_benchmark_env_and_prometheus_configs_are_tracked_and_scrape_expected_ta
     assert "KAFKA_PRODUCER_MAX_BATCH_SIZE=65536" in env_text
     assert "KAFKA_PRODUCER_COMPRESSION_TYPE=lz4" in env_text
     assert "METRICS_ENABLED=true" in env_text
-    assert "API_KEY=" in env_text
 
     prometheus_text = prometheus_path.read_text(encoding="utf-8")
     assert "collector-bench:8000" in prometheus_text

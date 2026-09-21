@@ -1,7 +1,6 @@
 import asyncio
 import importlib
 import json
-import os
 import sys
 
 import pytest
@@ -9,7 +8,6 @@ from websockets.exceptions import ConnectionClosedOK
 
 
 def load_collector_module():
-    os.environ["API_KEY"] = "test-key"
     sys.modules.pop("chzzk_collector_server", None)
     return importlib.import_module("chzzk_collector_server")
 
@@ -201,6 +199,40 @@ def test_receive_messages_stops_when_kafka_publish_fails():
     assert websocket.recv_calls == 1
     assert stats["total_collected_count"] == 0
     assert stats["per_channel"] == {}
+
+
+@pytest.mark.parametrize("ret_code", [0, 403, None])
+def test_connection_ack_records_sqlite_session_without_publishing(tmp_path, ret_code):
+    collector = load_collector_module()
+    store = collector.ChannelStore(str(tmp_path / "control.db"))
+    counter = collector.CmdCounter()
+    publisher = FakeRawPublisher()
+    last_chat_time = {"value": 0.0}
+    ack = {"cmd": 10100, "retCode": ret_code, "bdy": {"sid": "test-session", "auth": "READ"}}
+    chat = make_single_message("hello")
+    websocket = FakeWebSocket([json.dumps(ack), json.dumps(ack), json.dumps(chat)])
+
+    def on_connected():
+        store.start_monitoring_session("channel-1", "streamer")
+
+    receive = collector.receive_messages(
+        websocket, "channel-1", "streamer", counter, last_chat_time, publisher,
+        on_connected=on_connected,
+    )
+    if ret_code == 0:
+        asyncio.run(receive)
+        sessions = store.list_monitoring_sessions()
+        assert len(sessions) == 1
+        assert sessions[0].channel_id == "channel-1"
+        assert sessions[0].started_at is not None
+        assert [payload for _, payload, _ in publisher.calls] == [chat]
+        assert asyncio.run(counter.snapshot())["total_collected_count"] == 1
+    else:
+        with pytest.raises(RuntimeError, match="connection rejected"):
+            asyncio.run(receive)
+        assert store.list_monitoring_sessions() == []
+        assert publisher.calls == []
+        assert last_chat_time["value"] == 0.0
 
 
 def test_cmd_counter_recent_events_use_buckets_instead_of_per_event_deques():

@@ -2,18 +2,13 @@ import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
-from email.parser import BytesParser
-from email.policy import default as email_policy
 from pathlib import Path
 from typing import Optional
-from urllib.parse import parse_qs
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Request, Security
-from fastapi.responses import JSONResponse, Response
-from fastapi.security import APIKeyHeader
+from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from starlette.middleware.sessions import SessionMiddleware
 
 from collector.config import load_settings_from_env
 from collector.control import (
@@ -34,8 +29,6 @@ from collector.redis.cache import build_json_cache
 from collector.redis.keys import DASHBOARD_REALTIME_TTL_SECONDS, dashboard_realtime_key
 from collector.runtime import connect_to_chzzk, print_stats_periodically
 
-API_KEY_NAME = "X-API-Key"
-api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 logger = logging.getLogger(__name__)
@@ -45,61 +38,12 @@ class EnabledPayload(BaseModel):
     enabled: bool
 
 
-async def get_control_auth(request: Request, api_key: str = Security(api_key_header)):
-    expected_api_key = request.app.state.settings.api_key
-    if api_key == expected_api_key:
-        return "api-key"
-    if request.session.get("authenticated"):
-        return "session"
-    raise HTTPException(status_code=403, detail="Could not validate credentials")
-
-
-async def require_dashboard_session(request: Request):
-    if request.session.get("authenticated"):
-        return True
-    raise HTTPException(status_code=401, detail="Dashboard login required.")
-
-
 def serialize_channel_state(app: FastAPI, channel_payload: dict) -> dict:
     return channel_payload
 
 
 def resolve_channel_by_alias(store: ChannelStore, alias: str):
     return next((channel for channel in store.list_channels() if channel.alias == alias), None)
-
-
-async def extract_dashboard_api_key(request: Request) -> str:
-    raw_content_type = request.headers.get("content-type", "").strip()
-    content_type = raw_content_type.split(";", 1)[0].strip().lower()
-
-    if content_type == "application/json":
-        payload = await request.json()
-        if isinstance(payload, dict):
-            return str(payload.get("api_key", "")).strip()
-        return ""
-
-    if content_type == "application/x-www-form-urlencoded":
-        raw_body = await request.body()
-        parsed = parse_qs(raw_body.decode("utf-8", errors="replace"))
-        return parsed.get("api_key", [""])[0].strip()
-
-    if content_type == "multipart/form-data":
-        raw_body = await request.body()
-        message = BytesParser(policy=email_policy).parsebytes(
-            b"Content-Type: " + raw_content_type.encode("utf-8") + b"\r\n\r\n" + raw_body
-        )
-        if not message.is_multipart():
-            return ""
-
-        for part in message.iter_parts():
-            if part.get_param("name", header="content-disposition") != "api_key":
-                continue
-            payload = part.get_payload(decode=True) or b""
-            charset = part.get_content_charset() or "utf-8"
-            return payload.decode(charset, errors="replace").strip()
-        return ""
-
-    return request.query_params.get("api_key", "").strip()
 
 
 def build_app(
@@ -147,7 +91,6 @@ def build_app(
                 raise cleanup_errors[0]
 
     app = FastAPI(title="Chzzk Collector Control API", lifespan=lifespan)
-    app.add_middleware(SessionMiddleware, secret_key=resolved_settings.session_secret_key, same_site="lax")
 
     app.state.settings = resolved_settings
     app.state.counter = counter
@@ -166,7 +109,7 @@ def build_app(
         async def get_metrics():
             return Response(content=metrics.render(), media_type=CONTENT_TYPE_LATEST)
 
-    @app.post("/channels", status_code=202, dependencies=[Depends(get_control_auth)])
+    @app.post("/channels", status_code=202)
     async def add_channel(
         request: Request,
         channel_id: Optional[str] = None,
@@ -207,7 +150,7 @@ def build_app(
             "channel": serialize_channel_state(request.app, channel_payload),
         }
 
-    @app.patch("/channels/{channel_id}/enabled", dependencies=[Depends(get_control_auth)])
+    @app.patch("/channels/{channel_id}/enabled")
     async def update_channel_enabled(
         request: Request,
         channel_id: str,
@@ -239,7 +182,7 @@ def build_app(
             "channel": channel_payload,
         }
 
-    @app.delete("/channels", status_code=200, dependencies=[Depends(get_control_auth)])
+    @app.delete("/channels", status_code=200)
     async def delete_channel(
         request: Request,
         channel_id: Optional[str] = None,
@@ -276,7 +219,7 @@ def build_app(
             "streamer_nickname": existing.alias,
         }
 
-    @app.get("/channels", dependencies=[Depends(get_control_auth)])
+    @app.get("/channels")
     async def list_channels(request: Request):
         state = await request.app.state.coordinator.dashboard_state()
         return {
@@ -284,7 +227,7 @@ def build_app(
             "channels": state["channels"],
         }
 
-    @app.get("/stats", dependencies=[Depends(get_control_auth)])
+    @app.get("/stats")
     async def get_stats(request: Request):
         state = await request.app.state.coordinator.dashboard_state()
         return {
@@ -296,14 +239,6 @@ def build_app(
 
     @app.get("/dashboard")
     async def dashboard(request: Request):
-        if not request.session.get("authenticated"):
-            return TEMPLATES.TemplateResponse(
-                request,
-                "dashboard_login.html",
-                {
-                    "title": "CHZZK Monitoring Dashboard Login",
-                },
-            )
         return TEMPLATES.TemplateResponse(
             request,
             "dashboard.html",
@@ -313,20 +248,7 @@ def build_app(
             },
         )
 
-    @app.post("/dashboard/session")
-    async def create_dashboard_session(request: Request):
-        api_key = await extract_dashboard_api_key(request)
-        if api_key != request.app.state.settings.api_key:
-            raise HTTPException(status_code=401, detail="Invalid API key.")
-        request.session["authenticated"] = True
-        return JSONResponse({"authenticated": True})
-
-    @app.delete("/dashboard/session")
-    async def delete_dashboard_session(request: Request, _auth=Depends(require_dashboard_session)):
-        request.session.clear()
-        return JSONResponse({"authenticated": False})
-
-    @app.get("/dashboard/api/state", dependencies=[Depends(require_dashboard_session)])
+    @app.get("/dashboard/api/state")
     async def dashboard_state(request: Request, window: str = "current"):
         async def load_state():
             state = await request.app.state.coordinator.dashboard_state()

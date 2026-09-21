@@ -62,7 +62,7 @@ def collect_runtime_environment(*, root_dir: Path | None = None) -> dict[str, st
     profile = load_runtime_env(root_dir=root_dir)
     host = os.environ.get("HOST", "0.0.0.0").strip() or "0.0.0.0"
     port = str(int(os.environ.get("PORT", "8000").strip() or "8000"))
-    event_bus_backend = normalize_event_bus_backend(os.environ.get("EVENT_BUS_BACKEND", "pubsub"))
+    event_bus_backend = normalize_event_bus_backend(os.environ.get("EVENT_BUS_BACKEND"))
 
     return {
         "app_env": profile.app_env,

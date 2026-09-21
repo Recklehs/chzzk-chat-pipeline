@@ -47,9 +47,9 @@ class ControlConsumer(Protocol):
 
 
 def normalize_event_bus_backend(value: str | None) -> str:
-    normalized = (value or EVENT_BUS_BACKEND_PUBSUB).strip().lower()
+    normalized = (value or EVENT_BUS_BACKEND_KAFKA).strip().lower()
     if not normalized:
-        normalized = EVENT_BUS_BACKEND_PUBSUB
+        normalized = EVENT_BUS_BACKEND_KAFKA
 
     supported = {
         EVENT_BUS_BACKEND_KAFKA,

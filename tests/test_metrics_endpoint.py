@@ -1,7 +1,6 @@
 import asyncio
 import importlib
 import json
-import os
 import sys
 from urllib.request import urlopen
 
@@ -10,7 +9,6 @@ from websockets.exceptions import ConnectionClosedOK
 
 
 def load_collector_module():
-    os.environ["API_KEY"] = "test-key"
     sys.modules.pop("chzzk_collector_server", None)
     return importlib.import_module("chzzk_collector_server")
 
@@ -24,7 +22,7 @@ class FakeLiveStatusClient:
 
 
 class FakeMonitorTaskFactory:
-    async def __call__(self, channel_id, streamer_nickname, counter, live_status_client=None, raw_publisher=None):
+    async def __call__(self, channel_id, streamer_nickname, counter, live_status_client=None, raw_publisher=None, on_connected=None):
         raise AssertionError("monitor task should not be started in metrics endpoint tests")
 
 
@@ -71,7 +69,6 @@ def make_single_message(message, cmd=93101):
 
 def build_app(collector, tmp_path, *, metrics_enabled):
     settings = collector.AppSettings(
-        api_key="test-key",
         event_bus_backend="kafka",
         kafka_bootstrap_servers="localhost:9092",
         kafka_topic="chzzk.events.raw",
@@ -80,7 +77,6 @@ def build_app(collector, tmp_path, *, metrics_enabled):
         chzzk_api_timeout_seconds=5,
         chzzk_live_poll_seconds=15,
         control_db_path=str(tmp_path / "control.db"),
-        session_secret_key="session-secret",
         dashboard_refresh_seconds=5,
         metrics_enabled=metrics_enabled,
     )

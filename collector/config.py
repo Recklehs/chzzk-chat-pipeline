@@ -1,6 +1,5 @@
 import os
 import socket
-import sys
 
 from collector.control import AppSettings
 from collector.env_profiles import load_runtime_env
@@ -36,20 +35,10 @@ def _get_float_env(name: str, default: float) -> float:
 def load_settings_from_env() -> AppSettings:
     load_runtime_env()
 
-    api_key = os.environ.get("API_KEY", "").strip()
-    if not api_key:
-        print("=" * 60)
-        print(" [치명적 오류] API_KEY 환경 변수가 설정되지 않았습니다.")
-        print(" 스크립트 실행 전, .env 파일에 'API_KEY=your_secret_key'를 설정하거나")
-        print(" 'export API_KEY=your_secret_key'를 실행하세요.")
-        print("=" * 60)
-        sys.exit(1)
-
-    event_bus_backend = normalize_event_bus_backend(os.environ.get("EVENT_BUS_BACKEND", "pubsub"))
+    event_bus_backend = normalize_event_bus_backend(os.environ.get("EVENT_BUS_BACKEND"))
     redis_url = _get_optional_env("REDIS_URL")
 
     return AppSettings(
-        api_key=api_key,
         event_bus_backend=event_bus_backend,
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
         kafka_topic=os.environ.get("KAFKA_TOPIC", "chzzk.events.raw"),
@@ -66,7 +55,6 @@ def load_settings_from_env() -> AppSettings:
         chzzk_live_poll_seconds=float(os.environ.get("CHZZK_LIVE_POLL_SECONDS", "15")),
         chzzk_live_poll_max_seconds=float(os.environ.get("CHZZK_LIVE_POLL_MAX_SECONDS", "60")),
         control_db_path=os.environ.get("CONTROL_DB_PATH", "data/control.db"),
-        session_secret_key=os.environ.get("SESSION_SECRET_KEY", api_key),
         dashboard_refresh_seconds=int(os.environ.get("DASHBOARD_REFRESH_SECONDS", "5")),
         metrics_enabled=_get_bool_env("METRICS_ENABLED", False),
         redis_enabled=_get_bool_env("REDIS_ENABLED", bool(redis_url)),
