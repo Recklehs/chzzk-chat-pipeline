@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: collector-bench
+    static_configs:
+      - targets:
+          - collector-bench:8000
+
+  - job_name: cadvisor
+    static_configs:
+      - targets:
+          - cadvisor:8080
+
+  - job_name: kafka-jmx
+    static_configs:
+      - targets:
+          - kafka-jmx-exporter:9404

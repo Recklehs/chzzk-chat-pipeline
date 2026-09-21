@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f6f2ea;
+            --paper: #fffaf2;
+            --paper-strong: #fff;
+            --ink: #1f1a14;
+            --muted: #6a6257;
+            --line: #dfd2c2;
+            --accent: #cc5c33;
+            --accent-soft: rgba(204, 92, 51, 0.12);
+            --success: #1e7a46;
+            --warning: #8d5a14;
+            --danger: #ab2f2f;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            background:
+                radial-gradient(circle at top right, rgba(204, 92, 51, 0.12), transparent 28%),
+                linear-gradient(180deg, #f0e4d5 0%, var(--bg) 28%, #f5f1eb 100%);
+            color: var(--ink);
+            font-family: "Avenir Next", "SUIT", sans-serif;
+        }
+        .shell {
+            width: min(1240px, calc(100vw - 32px));
+            margin: 0 auto;
+            padding: 28px 0 56px;
+        }
+        .hero {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            align-items: end;
+            margin-bottom: 24px;
+        }
+        .hero h1 {
+            margin: 0;
+            font-size: clamp(2rem, 4vw, 3rem);
+            letter-spacing: -0.04em;
+        }
+        .hero p {
+            margin: 8px 0 0;
+            color: var(--muted);
+        }
+        .logout {
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            padding: 10px 16px;
+            background: rgba(255,255,255,0.7);
+            cursor: pointer;
+            font-weight: 700;
+        }
+        .grid {
+            display: grid;
+            gap: 18px;
+        }
+        .summary-grid {
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        }
+        .card {
+            background: rgba(255, 250, 242, 0.94);
+            border: 1px solid var(--line);
+            border-radius: 24px;
+            box-shadow: 0 18px 40px rgba(94, 65, 26, 0.08);
+        }
+        .summary-card {
+            padding: 18px 20px;
+        }
+        .summary-card .label {
+            font-size: 0.82rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .summary-card .value {
+            margin-top: 10px;
+            font-size: 2rem;
+            font-weight: 800;
+            letter-spacing: -0.05em;
+        }
+        .main-grid {
+            grid-template-columns: 1.1fr 0.9fr;
+            margin-top: 18px;
+        }
+        .panel {
+            padding: 22px;
+        }
+        .panel h2 {
+            margin: 0 0 14px;
+            font-size: 1.15rem;
+        }
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+        .panel-subtitle {
+            color: var(--muted);
+            font-size: 0.92rem;
+        }
+        .form-grid {
+            display: grid;
+            gap: 12px;
+            grid-template-columns: 2fr 1fr auto;
+        }
+        input {
+            width: 100%;
+            padding: 13px 14px;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: var(--paper-strong);
+            font-size: 0.98rem;
+        }
+        button.primary,
+        button.secondary,
+        button.danger {
+            border: 0;
+            border-radius: 14px;
+            padding: 12px 14px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        button.primary { background: var(--accent); color: #fff; }
+        button.secondary { background: var(--accent-soft); color: var(--accent); }
+        button.danger { background: rgba(171, 47, 47, 0.12); color: var(--danger); }
+        .hint {
+            margin-top: 12px;
+            min-height: 1.4rem;
+            color: var(--muted);
+            font-size: 0.92rem;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px 10px;
+            border-top: 1px solid var(--line);
+            text-align: left;
+            vertical-align: top;
+            font-size: 0.95rem;
+        }
+        th {
+            color: var(--muted);
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
+        .badge.live { background: rgba(30, 122, 70, 0.12); color: var(--success); }
+        .badge.idle { background: rgba(141, 90, 20, 0.12); color: var(--warning); }
+        .badge.disabled { background: rgba(106, 98, 87, 0.12); color: var(--muted); }
+        .channel-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .cmd-list {
+            display: grid;
+            gap: 10px;
+        }
+        .cmd-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 14px;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: rgba(255,255,255,0.7);
+        }
+        @media (max-width: 960px) {
+            .main-grid { grid-template-columns: 1fr; }
+            .form-grid { grid-template-columns: 1fr; }
+            .hero { align-items: start; flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+<main class="shell">
+    <section class="hero">
+        <div>
+            <h1>CHZZK Monitoring Dashboard</h1>
+            <p>등록 채널의 방송 상태와 수집 상태를 한 화면에서 제어합니다.</p>
+        </div>
+        <button class="logout" id="logout-button" type="button">로그아웃</button>
+    </section>
+
+    <section class="grid summary-grid" id="summary-grid"></section>
+
+    <section class="grid main-grid">
+        <article class="card panel">
+            <div class="panel-header">
+                <div>
+                    <h2>채널 제어</h2>
+                    <div class="panel-subtitle">치지직 채널 URL 또는 채널 ID를 입력하면 등록 후 즉시 방송 상태를 확인하고 공식 채널명을 가져옵니다.</div>
+                </div>
+            </div>
+            <form id="channel-form">
+                <div class="form-grid">
+                    <input id="channel-input" name="channel_input" placeholder="https://chzzk.naver.com/live/..." required>
+                    <input id="channel-alias" name="alias" placeholder="별칭 (선택, 내부 표시용)">
+                    <button class="primary" type="submit">채널 추가</button>
+                </div>
+            </form>
+            <div class="hint" id="form-hint"></div>
+
+            <div class="panel-header" style="margin-top: 20px;">
+                <div>
+                    <h2>등록 채널</h2>
+                    <div class="panel-subtitle">활성화된 채널은 방송 시작 시 자동으로 모니터링을 붙입니다.</div>
+                </div>
+            </div>
+            <div style="overflow:auto;">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>채널</th>
+                        <th>방송 상태</th>
+                        <th>모니터링</th>
+                        <th>최근 수집</th>
+                        <th>누적 수집</th>
+                        <th>동작</th>
+                    </tr>
+                    </thead>
+                    <tbody id="channels-body"></tbody>
+                </table>
+            </div>
+        </article>
+
+        <aside class="grid">
+            <article class="card panel">
+                <div class="panel-header">
+                    <div>
+                        <h2>CMD 분포</h2>
+                        <div class="panel-subtitle">전 채널 기준 누적 수집 분포</div>
+                    </div>
+                </div>
+                <div class="cmd-list" id="cmd-list"></div>
+            </article>
+        </aside>
+    </section>
+</main>
+
+<script>
+    const refreshSeconds = {{ refresh_seconds | tojson }};
+    const summaryGrid = document.getElementById("summary-grid");
+    const channelsBody = document.getElementById("channels-body");
+    const cmdList = document.getElementById("cmd-list");
+    const form = document.getElementById("channel-form");
+    const formHint = document.getElementById("form-hint");
+    const logoutButton = document.getElementById("logout-button");
+
+    function escapeHtml(value) {
+        return String(value ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+    }
+
+    function monitoringBadge(channel) {
+        if (!channel.enabled) {
+            return '<span class="badge disabled">비활성</span>';
+        }
+        if (channel.monitoring_status === "monitoring") {
+            return '<span class="badge live">수집 중</span>';
+        }
+        return '<span class="badge idle">대기 중</span>';
+    }
+
+    function liveBadge(channel) {
+        if (channel.last_live_status === "OPEN") {
+            return '<span class="badge live">방송 중</span>';
+        }
+        if (channel.last_live_status === "ERROR") {
+            return '<span class="badge idle">확인 오류</span>';
+        }
+        if (channel.last_live_status === "NOT_FOUND") {
+            return '<span class="badge disabled">존재 안함</span>';
+        }
+        return '<span class="badge idle">오프라인</span>';
+    }
+
+    function renderSummary(summary) {
+        const cards = [
+            ["등록 채널", summary.registered_channel_count],
+            ["활성 채널", summary.enabled_channel_count],
+            ["방송 중", summary.live_channel_count],
+            ["현재 수집 중", summary.monitoring_channel_count],
+            ["총 수집 건수", summary.total_collected_count],
+            ["최근 1분 수집", summary.recent_events_per_minute],
+        ];
+        summaryGrid.innerHTML = cards.map(([label, value]) => `
+            <article class="card summary-card">
+                <div class="label">${escapeHtml(label)}</div>
+                <div class="value">${escapeHtml(value)}</div>
+            </article>
+        `).join("");
+    }
+
+    function renderCmdCounts(cmdCounts) {
+        const entries = Object.entries(cmdCounts);
+        if (!entries.length) {
+            cmdList.innerHTML = '<div class="cmd-item"><span>아직 수집된 이벤트가 없습니다.</span><strong>0</strong></div>';
+            return;
+        }
+        cmdList.innerHTML = entries
+            .sort((a, b) => Number(b[1]) - Number(a[1]))
+            .map(([cmd, count]) => `
+                <div class="cmd-item">
+                    <span>CMD ${escapeHtml(cmd)}</span>
+                    <strong>${escapeHtml(count)}</strong>
+                </div>
+            `)
+            .join("");
+    }
+
+    function renderChannels(channels) {
+        if (!channels.length) {
+            channelsBody.innerHTML = '<tr><td colspan="6">등록된 채널이 없습니다.</td></tr>';
+            return;
+        }
+        channelsBody.innerHTML = channels.map((channel) => `
+            <tr>
+                <td>
+                    <strong>${escapeHtml(channel.display_name || channel.channel_name || channel.alias || channel.channel_id)}</strong><br>
+                    ${channel.alias && channel.alias !== channel.channel_name ? `<span style="color: var(--muted);">별칭: ${escapeHtml(channel.alias)}</span><br>` : ""}
+                    <span style="color: var(--muted);">${escapeHtml(channel.channel_id)}</span><br>
+                    <span style="color: var(--muted);">${escapeHtml(channel.last_live_title || "")}</span>
+                </td>
+                <td>
+                    ${liveBadge(channel)}<br>
+                    <span style="color: var(--muted);">시청자 ${escapeHtml(channel.viewer_count ?? 0)}</span>
+                </td>
+                <td>${monitoringBadge(channel)}</td>
+                <td>
+                    <strong>${escapeHtml(channel.recent_events_per_minute)}</strong>/min<br>
+                    <span style="color: var(--muted);">${escapeHtml(channel.last_message_at || "-")}</span>
+                </td>
+                <td>${escapeHtml(channel.total_collected_count)}</td>
+                <td>
+                    <div class="channel-actions">
+                        <button class="${channel.enabled ? "secondary" : "primary"}" data-action="toggle" data-channel-id="${escapeHtml(channel.channel_id)}" data-enabled="${channel.enabled ? "false" : "true"}">
+                            ${channel.enabled ? "비활성화" : "활성화"}
+                        </button>
+                        <button class="danger" data-action="delete" data-channel-id="${escapeHtml(channel.channel_id)}">삭제</button>
+                    </div>
+                </td>
+            </tr>
+        `).join("");
+    }
+
+    async function loadState() {
+        const response = await fetch("/dashboard/api/state");
+        if (response.status === 401) {
+            window.location.reload();
+            return;
+        }
+        const payload = await response.json();
+        renderSummary(payload.summary);
+        renderCmdCounts(payload.collected_cmds);
+        renderChannels(payload.channels);
+    }
+
+    async function submitChannel(event) {
+        event.preventDefault();
+        formHint.textContent = "";
+
+        const params = new URLSearchParams({
+            channel_input: document.getElementById("channel-input").value.trim(),
+        });
+        const alias = document.getElementById("channel-alias").value.trim();
+        if (alias) {
+            params.set("alias", alias);
+        }
+
+        const response = await fetch(`/channels?${params.toString()}`, { method: "POST" });
+        const payload = await response.json().catch(() => ({ detail: "요청에 실패했습니다." }));
+        if (!response.ok) {
+            formHint.textContent = payload.detail || "채널 추가에 실패했습니다.";
+            return;
+        }
+
+        form.reset();
+        formHint.textContent = "채널이 저장되었습니다.";
+        await loadState();
+    }
+
+    async function handleTableAction(event) {
+        const target = event.target.closest("button[data-action]");
+        if (!target) {
+            return;
+        }
+
+        const action = target.dataset.action;
+        const channelId = target.dataset.channelId;
+
+        if (action === "toggle") {
+            const enabled = target.dataset.enabled === "true";
+            const response = await fetch(`/channels/${encodeURIComponent(channelId)}/enabled`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled }),
+            });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ detail: "상태 변경에 실패했습니다." }));
+                formHint.textContent = payload.detail || "상태 변경에 실패했습니다.";
+                return;
+            }
+        }
+
+        if (action === "delete") {
+            const response = await fetch(`/channels?channel_id=${encodeURIComponent(channelId)}`, {
+                method: "DELETE",
+            });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => ({ detail: "삭제에 실패했습니다." }));
+                formHint.textContent = payload.detail || "삭제에 실패했습니다.";
+                return;
+            }
+        }
+
+        await loadState();
+    }
+
+    async function logout() {
+        await fetch("/dashboard/session", { method: "DELETE" });
+        window.location.reload();
+    }
+
+    form.addEventListener("submit", submitChannel);
+    channelsBody.addEventListener("click", handleTableAction);
+    logoutButton.addEventListener("click", logout);
+
+    loadState();
+    setInterval(loadState, refreshSeconds * 1000);
+</script>
+</body>
+</html>

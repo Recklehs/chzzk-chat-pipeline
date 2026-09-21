@@ -1,0 +1,2 @@
+{"channel_id":"channel-1","scenario":"steady-chat","received_at":"2026-04-23T10:00:00+09:00","message":{"cmd":93101,"bdy":{"msg":"hello","cmd":93101}}}
+{"channel_id":"channel-1","scenario":"steady-chat","received_at":"2026-04-23T10:00:01+09:00","message":{"cmd":93101,"bdy":{"msg":"hello again","cmd":93101}}}

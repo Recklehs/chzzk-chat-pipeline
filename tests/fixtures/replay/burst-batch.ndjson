@@ -1,0 +1,2 @@
+{"channel_id":"channel-1","scenario":"burst-batch","received_at":"2026-04-23T10:00:00+09:00","message":{"cmd":93101,"bdy":[{"msg":"burst-1","cmd":93101},{"msg":"burst-2","cmd":93101},{"msg":"burst-3","cmd":93101}]}}
+{"channel_id":"channel-1","scenario":"burst-batch","received_at":"2026-04-23T10:00:01+09:00","message":{"cmd":93101,"bdy":[{"msg":"burst-4","cmd":93101},{"msg":"burst-5","cmd":93101}]}}

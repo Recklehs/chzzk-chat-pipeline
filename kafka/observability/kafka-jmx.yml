@@ -1,0 +1,19 @@
+hostPort: kafka:9999
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+rules:
+  - pattern: "kafka.server<type=BrokerTopicMetrics, name=(BytesInPerSec|BytesOutPerSec|MessagesInPerSec), topic=(.+)><>Count"
+    name: kafka_server_brokertopicmetrics_$1_total
+    labels:
+      topic: "$2"
+    type: COUNTER
+  - pattern: "kafka.network<type=RequestMetrics, name=(TotalTimeMs|RequestQueueTimeMs), request=(Produce)><>Count"
+    name: kafka_network_requestmetrics_$1_count
+    labels:
+      request: "$2"
+    type: COUNTER
+  - pattern: "kafka.network<type=RequestMetrics, name=(TotalTimeMs|RequestQueueTimeMs), request=(Produce)><>Mean"
+    name: kafka_network_requestmetrics_$1_mean
+    labels:
+      request: "$2"
+    type: GAUGE

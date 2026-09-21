@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.test
+.env.prod
+.idea/
+.jbeval/
+.pytest_cache/
+.venv/
+__pycache__/
+*.pyc
+*.ipynb_checkpoints
+**/.ipynb_checkpoints/
+
+/data/
+
+manual/

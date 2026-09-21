@@ -1,0 +1,219 @@
+{
+  "info": {
+    "_postman_id": "6d8a3b40-5a2e-4f5f-8f63-64f9f50db385",
+    "name": "CHZZK Collector API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "CHZZK 수집기 제어 API (채널 추가/삭제/조회/통계)"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{apiKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Add Channel",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 202', function () {",
+              "    pm.response.to.have.status(202);",
+              "});",
+              "pm.test('Response has message and channel_id', function () {",
+              "    var body = pm.response.json();",
+              "    pm.expect(body).to.have.property('message');",
+              "    pm.expect(body).to.have.property('channel_id');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/channels?channel_id={{sampleChannelId}}&streamer_nickname={{sampleNickname}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "channels"
+          ],
+          "query": [
+            {
+              "key": "channel_id",
+              "value": "{{sampleChannelId}}"
+            },
+            {
+              "key": "streamer_nickname",
+              "value": "{{sampleNickname}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Delete Channel By ID",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "pm.test('Response has message', function () {",
+              "    var body = pm.response.json();",
+              "    pm.expect(body).to.have.property('message');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/channels?channel_id={{sampleChannelId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "channels"
+          ],
+          "query": [
+            {
+              "key": "channel_id",
+              "value": "{{sampleChannelId}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Delete Channel By Nickname",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "pm.test('Response has message', function () {",
+              "    var body = pm.response.json();",
+              "    pm.expect(body).to.have.property('message');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/channels?streamer_nickname={{sampleNickname}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "channels"
+          ],
+          "query": [
+            {
+              "key": "streamer_nickname",
+              "value": "{{sampleNickname}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "List Channels",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "pm.test('Response has monitoring_count and channels', function () {",
+              "    var body = pm.response.json();",
+              "    pm.expect(body).to.have.property('monitoring_count');",
+              "    pm.expect(body).to.have.property('channels');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/channels",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "channels"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Stats",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "pm.test('Response has collected_cmds', function () {",
+              "    var body = pm.response.json();",
+              "    pm.expect(body).to.have.property('collected_cmds');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/stats",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "stats"
+          ]
+        }
+      }
+    }
+  ]
+}

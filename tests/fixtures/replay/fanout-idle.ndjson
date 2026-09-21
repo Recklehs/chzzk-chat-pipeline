@@ -1,0 +1,3 @@
+{"channel_id":"channel-1","scenario":"fanout-idle","received_at":"2026-04-23T10:00:00+09:00","message":{"cmd":10000,"bdy":{"msg":"ping","cmd":10000}}}
+{"channel_id":"channel-2","scenario":"fanout-idle","received_at":"2026-04-23T10:00:01+09:00","message":{"cmd":10000,"bdy":{"msg":"ping","cmd":10000}}}
+{"channel_id":"channel-3","scenario":"fanout-idle","received_at":"2026-04-23T10:00:02+09:00","message":{"cmd":93101,"bdy":{"msg":"idle chat","cmd":93101}}}

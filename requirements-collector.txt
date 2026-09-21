@@ -1,0 +1,12 @@
+requests
+websockets
+python-dotenv
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+itsdangerous
+redis
+aiokafka
+cramjam
+google-cloud-pubsub
