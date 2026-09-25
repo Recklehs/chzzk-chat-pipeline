@@ -1,0 +1,39 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            이 PR의 변경 사항을 리뷰해 주세요. 정확성 버그, 데이터 유실, 보안, 테스트 누락에 집중하고 사소한 스타일 지적은 생략합니다.
+            저장소 루트의 AGENTS.md에 있는 Code Review Rules를 따릅니다: 리뷰 제목, 지적 사항, 설명과 요약은 한국어로 작성하고,
+            코드 식별자, 파일 경로, 오류 메시지와 우선순위 표기(P0–P3)는 원문을 유지합니다. 각 지적에 P0–P3 우선순위를 붙입니다.
+
+            특정 줄에 대한 지적은 인라인 코멘트로, 전체 요약은 `gh pr comment`로 한 번만 남깁니다. 문제가 없으면 요약만 남깁니다.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
