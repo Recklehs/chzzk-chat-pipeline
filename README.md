@@ -1,12 +1,12 @@
-# CHZZK Collector + Spark Bronze Pipeline
+# CHZZK Collector + Spark Bronze / Silver Pipeline
 
-치지직(CHZZK) 방송 채널을 등록해 방송 상태를 확인하고, 방송 중일 때 채팅 WebSocket 이벤트를 메시지 버스로 발행하는 `collector` 와, 별도로 실행하는 `spark` Bronze 적재 런타임을 분리해서 관리하는 프로젝트입니다.
+치지직(CHZZK) 방송 채널의 채팅 WebSocket 이벤트를 수집하는 `collector`와, 원본을 보존하는 Spark Bronze 및 이벤트를 정제하는 Spark Silver 작업을 분리해서 관리합니다.
 
-현재 구조의 핵심은 아래 두 가지입니다.
+현재 구조의 핵심은 다음과 같습니다.
 
 - `collector` 는 채널 모니터링, CHZZK 메시지 수집, raw 이벤트 발행과 HTTP 기반 채널 제어에만 집중합니다.
-- 기본 경로는 **Collector → Kafka → Spark → 로컬 Delta** 입니다. GCS 버킷이나 Google 인증 없이 실행합니다.
-- `spark` 는 `local[*] + spark-submit + properties file` 흐름으로 Bronze 적재를 담당합니다.
+- 기본 경로는 **Collector → Kafka → Bronze Delta → Silver Delta**입니다. GCS 버킷이나 Google 인증 없이 실행합니다.
+- Bronze와 Silver는 각각 별도 `spark-submit` 프로세스와 체크포인트를 사용합니다.
 
 ## 프로젝트 구조
 
@@ -27,6 +27,9 @@
 │   ├── job.py
 │   ├── delta_maintenance.py
 │   ├── kafka_raw_to_bronze.py
+│   ├── bronze_to_silver.py
+│   ├── silver_parser.py
+│   ├── silver_store.py
 │   ├── submit.ps1
 │   └── conf/
 │       ├── local.properties
@@ -70,7 +73,7 @@ Kafka 계약:
 - `payload_json`에 수신 프레임 전체를 보존하고, 조회용 `cmd`와 수집 메타데이터만 추출합니다. 채팅 여러 건이 담겨도 원본은 한 번만 저장합니다.
 - `94008` 같은 객체 본문, 미지원 cmd, 빈 본문도 보존합니다. Kafka에 들어온 JSON이 깨졌거나 cmd를 정수로 변환할 수 없으면 `cmd=null`로 원문을 저장하며, Bronze에서 DLQ로 분기하지 않습니다.
 - `10100`은 Collector에서 SQLite 연결 이력으로 처리하며, 과거 Kafka 데이터의 `10100`도 Bronze 적재에서 제외합니다.
-- 메시지별 분리, `msgTime` 등의 상세 파싱과 검증은 이후 Silver의 책임입니다. Silver 작업은 아직 구현하지 않았습니다.
+- 메시지별 분리, `msgTime` 등의 상세 파싱과 검증은 별도 Silver 작업이 담당합니다.
 - `ingested_at`은 Spark 처리 시각, `event_date`는 Kafka 메시지 날짜입니다. 메시지 발생 시각은 `payload_json` 안의 `msgTime`으로 보존합니다.
 - Windows PowerShell 수동 실행은 `spark-submit --properties-file ...` 경로를 사용합니다.
 - `spark.master=local[*]` 와 Delta auto compaction / optimize write 설정은 유지합니다.
@@ -88,6 +91,21 @@ Bronze 컬럼:
 | `ingested_at` | timestamp | Spark 처리 시각 |
 | `event_date` | date | Kafka 메시지 날짜, Delta 파티션 |
 
+Silver는 다음 여섯 Delta 테이블을 만듭니다. 분석용 네 테이블과 `unclassified_events`에는 채널·발생 시각·원본 좌표 등 공통 컬럼을 각각 저장합니다. 집계는 수행하지 않습니다. [전체 스키마와 품질 규칙](docs/silver-data-contract.md)을 참고하세요.
+
+| 테이블 | 저장 대상 |
+|---|---|
+| `chat_messages` | 일반 채팅 |
+| `donations` | CHAT 후원, 금액은 원본 단위 |
+| `subscription_gifts` | 수신자별 구독 선물 알림 |
+| `subscription_notifications` | 구독 개월 수 알림, 신규 가입·갱신·결제 구분은 미확정 |
+| `unclassified_events` | 유효하지만 아직 지원하지 않는 유형과 시스템 안내 |
+| `quarantine` | 필수값 오류 및 원본·업무 키 충돌 |
+
+동일 원본의 재처리와 후원·선물 업무 중복을 제거합니다. 상충하는 후원·선물은 이미 저장된 정상 행도 제외하고 충돌 키를 격리에 남깁니다. 여섯 테이블의 저장은 원자적이지 않으며, 일부 실패 시 같은 배치 재시도로 복구합니다. Gold를 추가할 때는 이 삭제를 반영하는 재계산 또는 변경 반영 방식을 사용해야 합니다.
+
+같은 Kafka 좌표의 원문·채널·Kafka 시각이 Bronze에서 달라지면 쓰기 전에 배치를 중단합니다. 이미 업무 중복으로 생략한 원본도 검사합니다. Bronze를 수정·삭제하거나 Kafka 토픽을 재생성해 좌표를 재사용할 때는 기존 원천과 분리된 경로로 운영해야 합니다.
+
 ## Spark 경로 규칙
 
 `spark/conf/*.properties` 에는 개별 Bronze/checkpoint 경로 대신 base URI 하나만 넣습니다.
@@ -102,6 +120,10 @@ app.bucket.uri=data/output/local/frames
 
 - Bronze: `data/output/local/frames/bronze`
 - Checkpoint: `data/output/local/frames/checkpoint`
+- Silver: `data/output/local/frames/silver/<table>`
+- Silver checkpoint: `data/output/local/frames/silver_checkpoint`
+
+Silver만 다른 경로를 쓰려면 `app.silver.path`, `app.silver.checkpoint.path`를 properties 파일에 지정합니다. 입력·출력·각 체크포인트 경로는 겹칠 수 없습니다. 데이터, 체크포인트와 로그는 모두 Git에서 제외된 `data/` 아래에 둡니다.
 
 기존 `data/output/local/bronze`, `dead_letter`, `checkpoint`는 그대로 보존합니다. 프레임 형식은 기존 테이블에 스키마를 병합하거나 기존 체크포인트를 재사용하지 않고 새 경로에서 시작합니다. `dead_letter` 경로 설정은 이전 설정과의 호환을 위해 남아 있지만 새 작업에서는 쓰지 않습니다.
 
@@ -243,6 +265,19 @@ source .venv/bin/activate
 - 기본 처리 주기는 30초입니다. 로컬 설정의 최초 실행은 `app.kafka.startingOffsets=earliest`로 Kafka에 남아 있는 가장 오래된 데이터부터 읽습니다. 재시작할 때는 새 형식의 체크포인트를 사용하며, 이미 Kafka에서 만료된 데이터까지 복구하지는 않습니다.
 - 기존 작업에서 전환할 때는 실행 중인 Spark를 종료한 뒤 같은 명령으로 다시 시작합니다. Collector도 재시작해야 앞서 수정한 `10100`의 SQLite 전용 처리가 적용됩니다.
 - Collector와 Spark 종료: 각 터미널에서 `Ctrl+C`. Kafka 종료: `docker compose -f kafka/compose.yaml down` (볼륨은 유지).
+
+5. Bronze 테이블이 생성된 뒤 다른 터미널에서 Silver를 시작합니다. 활성화한 Python 가상환경과 JDK 17을 그대로 사용합니다.
+
+```bash
+.venv/bin/spark-submit --properties-file spark/conf/local.properties \
+  spark/bronze_to_silver.py --properties-file spark/conf/local.properties
+```
+
+`SPARK_SILVER_READY`는 스트림 시작을 뜻합니다. 각 배치 완료는 `[spark-silver]` JSON 로그의 `status: completed`로 확인합니다. 최초 실행은 기존 Bronze부터 적재하고 이후 새 데이터를 이어 처리합니다. 실행 시점까지의 데이터만 처리하고 종료하려면 끝에 `--available-now`를 붙입니다. 이후 같은 출력·체크포인트로 연속 실행할 수 있습니다.
+
+현재 Silver는 macOS/Linux의 로컬 파일시스템과 단일 writer를 지원합니다. 출력 경로의 파일 잠금으로 중복 실행을 막고, 파서 버전·입력·체크포인트를 `_silver_contract.json`에 고정합니다. 파서 계약을 바꿔 재구축할 때는 새 Silver 출력과 새 체크포인트를 함께 지정하세요. Bronze와 기존 출력은 보존합니다.
+
+파싱·중복 판정은 드라이버에서 10,000항목씩 처리합니다. Spark가 입력과 Delta 읽기·쓰기를 수행하며, 채널 수와 누적량 증가로 처리 주기를 따라가지 못하면 파싱·키 비교를 executor로 옮기는 것이 다음 확장 지점입니다. 대시보드는 현재 Collector 현황만 보여줍니다.
 
 ### 선택 사항: Pub/Sub emulator + collector
 
@@ -432,6 +467,7 @@ GCS용 프로필을 명시적으로 사용할 때만 ADC를 준비합니다. 기
 - collector API 회귀 테스트
 - Spark runtime 설정 / session 테스트
 - Spark Bronze job 단위 테스트
+- Silver 분류·검증·중복·충돌 처리 및 실행 설정 테스트
 
 권장 실행:
 
@@ -443,6 +479,12 @@ GCS용 프로필을 명시적으로 사용할 때만 ADC를 준비합니다. 기
 
 ```bash
 .venv/bin/python tests/check_bronze_schema.py
+```
+
+Silver의 실제 Delta 재처리, 격리 저장 직후 장애 복구, Bronze 스트림 체크포인트 재시작과 새 입력 처리는 아래 검사로 확인합니다. 임시 디렉터리에서 실행하며 기존 데이터를 변경하지 않습니다.
+
+```bash
+.venv/bin/python tests/check_silver.py
 ```
 
 ## 참고
