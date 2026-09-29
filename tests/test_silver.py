@@ -1,7 +1,7 @@
 """Silver's observable contracts, using synthetic events without personal data."""
 import copy
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -152,6 +152,32 @@ def test_bronze_timestamp_microseconds_are_preserved():
     row=parse(frame(kafka_timestamp_us=MS*1000+123,ingested_at_us=MS*1000+456))[0]
     assert row['kafka_timestamp'].microsecond==123
     assert row['bronze_ingested_at'].microsecond==456
+
+
+@pytest.mark.parametrize('unit', ['ms', 'us'])
+def test_bronze_timestamp_strings_match_integer_values(unit):
+    values={f'kafka_timestamp_{unit}': MS if unit=='ms' else MS*1000+123,
+            f'ingested_at_{unit}': MS+1000 if unit=='ms' else MS*1000+456}
+    actual=parse(frame(**{k:str(v) for k,v in values.items()}))[0]
+    assert actual['table']=='chat_messages'
+    assert actual['kafka_timestamp']==NOW+timedelta(microseconds=123 if unit=='us' else 0)
+    assert actual['bronze_ingested_at']==NOW+(timedelta(microseconds=456) if unit=='us' else timedelta(seconds=1))
+
+
+def test_invalid_msg_time_reports_only_the_source_field():
+    row=parse(frame([message(msgTime=True)]))[0]
+    assert row['table']=='quarantine'
+    assert row['error_fields']==['bdy.msgTime']
+
+
+def test_empty_batch_does_not_read_bronze_history():
+    from spark.silver_store import validate_bronze_source
+    class EmptyBatch:
+        def isEmpty(self):return True
+        @property
+        def sparkSession(self):
+            raise AssertionError('empty batch read Bronze history')
+    validate_bronze_source(EmptyBatch(), '/unused-bronze')
 
 
 def test_runtime_paths_and_lock_prevent_mixed_or_concurrent_writers(tmp_path):

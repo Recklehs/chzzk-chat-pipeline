@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-PARSER_VERSION = 'silver-v3.1'
+PARSER_VERSION = 'silver-v3.2'
 SOURCE_KEY = ('topic', 'partition', 'offset', 'body_index')
 TABLES = ('chat_messages', 'donations', 'subscription_gifts',
           'subscription_notifications', 'unclassified_events')
@@ -128,13 +128,14 @@ def parse_item(row, item, frame, now):
                           ('event_time', 'msg_time_ms')):
         microseconds = field != 'msg_time_ms' and field.replace('_ms', '_us') in frame
         value = row.get(field) if field == 'msg_time_ms' else frame.get(field.replace('_ms', '_us') if microseconds else field)
+        value = integer(value)
         try:
-            if integer(value) is None:
+            if value is None:
                 raise ValueError
             row[target] = EPOCH + timedelta(microseconds=value if microseconds else value * 1000)
         except (ValueError, OverflowError, TypeError):
             row[target] = None
-            fail(field)
+            fail('bdy.msgTime' if field == 'msg_time_ms' else field)
     if row['event_time'] is not None:
         try:
             row['event_date_kst'] = row['event_time'].astimezone(KST).date()

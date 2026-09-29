@@ -97,7 +97,7 @@ def main(argv=None):
         nonlocal stopped
         stopped = True
     with writer_lock(settings):
-        spark = create_spark_session(settings.runtime)
+        spark = create_spark_session(settings.runtime, kafka=False)
         query = None
         previous = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGINT, signal.SIGTERM)}
         try:

@@ -29,6 +29,7 @@ def main():
     def df(records):return spark.createDataFrame(records,schema)
     try:
         with TemporaryDirectory() as root:
+            silver_store.validate_bronze_source(df([]), root+'/nonexistent-bronze')
             # A discarded business duplicate, an empty body and an out-of-scope frame
             # must not hide changed content at an existing Kafka coordinate.
             source_path=root+'/integrity-bronze'

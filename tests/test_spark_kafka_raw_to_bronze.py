@@ -54,7 +54,8 @@ def test_runtime_settings_require_output_and_checkpoint(monkeypatch):
         module.load_runtime_settings()
 
 
-def test_create_spark_session_sets_delta_and_kafka_configs(monkeypatch):
+@pytest.mark.parametrize('kafka', [True, False])
+def test_create_spark_session_sets_delta_and_kafka_configs(monkeypatch, kafka):
     module = load_module()
 
     class FakeBuilder:
@@ -109,14 +110,15 @@ def test_create_spark_session_sets_delta_and_kafka_configs(monkeypatch):
     )
 
     spark = module.create_spark_session(
-        module.RuntimeSettings(output_path="/shared/bronze", checkpoint_path="/shared/checkpoints")
+        module.RuntimeSettings(output_path="/shared/bronze", checkpoint_path="/shared/checkpoints"),
+        **({} if kafka else {"kafka": False}),
     )
 
     assert spark is fake_spark
     assert fake_builder.app_name == module.DEFAULT_APP_NAME
     assert ("spark.databricks.delta.autoCompact.enabled", "true") in fake_builder.configs
     assert ("spark.databricks.delta.optimizeWrite.enabled", "true") in fake_builder.configs
-    assert captured["extra_packages"] == ["org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1"]
+    assert captured["extra_packages"] == (["org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1"] if kafka else [])
     assert fake_spark.sparkContext.log_levels == ["WARN"]
 
 

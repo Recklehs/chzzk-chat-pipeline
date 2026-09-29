@@ -258,10 +258,13 @@ def apply_changes(spark, output_path, changes):
 
 def validate_bronze_source(batch, bronze_path=None):
     """Check immutable Kafka content, including sources discarded by business dedup."""
+    if batch.isEmpty():
+        return
     from pyspark.sql import functions as F
     coordinates = list(SOURCE_KEY[:3])
     source = batch
     if bronze_path is not None:
+        # ponytail: scan full history for immutable coordinates; add a coordinate index if scans exceed the trigger interval.
         source = (batch.sparkSession.read.format('delta').load(bronze_path)
                   .join(F.broadcast(batch.select(*coordinates).distinct()), coordinates, 'left_semi'))
     timestamp = 'kafka_timestamp' if 'kafka_timestamp' in source.columns else 'kafka_timestamp_ms'
