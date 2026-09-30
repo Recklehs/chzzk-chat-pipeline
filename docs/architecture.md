@@ -1,6 +1,6 @@
 # 시스템 아키텍처
 
-2026-09-19 로컬 작업 트리의 Kafka 기본 경로 기준. 이 문서는 구성과 코드 연결을 설명하며, 프로세스의 현재 실행 여부를 표시하지 않는다.
+2026-09-22 로컬 작업 트리의 Kafka 기본 경로 기준. 이 문서는 구성과 코드 연결을 설명하며, 프로세스의 현재 실행 여부를 표시하지 않는다.
 
 ## 1. 전체 시스템 구성
 
@@ -22,6 +22,9 @@ flowchart TB
         SP["Spark · Python + JVM 프로세스<br/>Structured Streaming · local[*]<br/>기본 30초 처리 주기"]
         BR[("Bronze Delta<br/>data/output/local/frames/bronze")]
         CP[("Checkpoint<br/>data/output/local/frames/checkpoint")]
+        SS["Silver Spark · 별도 프로세스<br/>본문 펼치기 · 정제 · 검증 · 중복 처리"]
+        SL[("Silver Delta · 6개 테이블<br/>data/output/local/frames/silver")]
+        SC[("Silver checkpoint<br/>data/output/local/frames/silver_checkpoint")]
     end
 
     USER -->|"채널 등록 · 제어 · 상태 조회"| COL
@@ -32,6 +35,9 @@ flowchart TB
     K -->|"스트리밍 읽기"| SP
     SP -->|"수신 프레임 1개를 원문 그대로 1행 저장"| BR
     SP <-->|"처리 진행 위치"| CP
+    BR --> SS
+    SS --> SL
+    SS <--> SC
     USER -.-> UI
     UI -. "Docker 내부 kafka:29092" .-> K
     REDIS[("Redis · 선택 구성<br/>대시보드 상태 캐시 / TTL 10초")]
@@ -121,7 +127,21 @@ flowchart TB
 - Kafka 메시지 한 개가 Bronze 한 행이다. `payload_json`은 원문을 그대로 보존하며 `bdy`가 배열·객체·빈 값이어도 저장한다. cmd 추출 실패 시 `cmd=null`로 남긴다. 새 Bronze 작업은 DLQ를 쓰지 않는다.
 - `10100` 연결 응답은 SQLite 전용이다. 과거 Kafka에 남은 연결 응답도 Bronze에서는 제외한다.
 - 최초 로컬 실행은 `earliest`로 Kafka에 남은 데이터를 읽는다. 이후에는 같은 새 체크포인트로 재시작하며, Delta의 직접 스트리밍 쓰기를 사용한다.
-- 메시지별 행 분리, 이벤트별 타입·필수값 검증은 이후 Silver에서 수행할 예정이다. Collector에서 JSON 파싱에 실패한 프레임은 현재 Kafka 발행 전 제외되므로 이 Bronze 보존 범위에 포함되지 않는다.
+- 메시지별 행 분리, 이벤트별 타입·필수값 검증은 별도 Silver 작업에서 수행한다. Collector에서 JSON 파싱에 실패한 프레임은 현재 Kafka 발행 전 제외되므로 이 Bronze 보존 범위에 포함되지 않는다.
+
+Silver의 실행 진입점은 [spark/bronze_to_silver.py](../spark/bronze_to_silver.py)다. 기존 설정과 Spark 세션을 재사용하며, 하나의 Bronze Delta 스트림과 `foreachBatch`로 여섯 출력 테이블을 갱신한다.
+
+| 모듈 | 책임 |
+|---|---|
+| [spark/bronze_to_silver.py](../spark/bronze_to_silver.py) | 경로 검증, 로컬 writer 잠금, 파서 계약 고정, 연속/available-now 실행 |
+| [spark/silver_parser.py](../spark/silver_parser.py) | 원본 배열 인덱스 유지, 엄격한 필드 검증, 유형 분류, 익명·프로필 처리, UTC/KST 시간 변환 |
+| [spark/silver_store.py](../spark/silver_store.py) | 명시적 스키마, 원본·업무 키 비교, 충돌 격리와 기존 정상 행 제외, 멱등 MERGE |
+
+출력은 `chat_messages`, `donations`, `subscription_gifts`, `subscription_notifications`, `unclassified_events`, `quarantine`이다. 분석용 네 테이블과 미분류 테이블은 공통 컬럼을 각 행에 가진다. 통합 부모 테이블이나 Gold 집계는 만들지 않는다. [데이터 계약](silver-data-contract.md)에 행의 의미·필수값·키·품질 처리 규칙을 명시한다.
+
+충돌 키를 quarantine에 먼저 저장한 뒤 관련 정상 행을 삭제하므로, 그 사이 장애가 나도 같은 배치 재시도로 제외를 완료한다. 여섯 테이블 전체의 원자적 커밋은 제공하지 않는다. Gold는 후원·선물 행의 사후 제외도 반영해야 한다.
+
+현재 Silver는 macOS/Linux 로컬 파일시스템의 단일 writer만 지원한다. 파싱·중복 판정은 드라이버에서 10,000항목씩 수행하고 Spark는 Delta 읽기·쓰기를 담당한다. 처리량이 커지면 executor 파싱·조인으로 확장한다. 계약 변경 시 새 출력과 체크포인트에서 Bronze를 다시 정제한다.
 
 ## 4. 보조 구성과 현재 범위
 
@@ -135,6 +155,6 @@ flowchart TB
 | 선택·이전 경로 | Pub/Sub publisher/bootstrap/watcher, GCS용 dev/prod properties | 코드에 남아 있으나 현재 Kafka+로컬 기본 흐름에서는 사용하지 않음 |
 | 호환 진입점 | `chzzk_control.py`, `kafka_raw_publisher.py` | collector 모듈을 재노출하는 얇은 파일 |
 
-현재 기본 파이프라인의 끝은 프레임 단위 Bronze 적재다. Silver/Gold 집계, 감정·키워드 분석, Spark 결과 조회 API는 아직 기본 흐름에 연결되어 있지 않다.
+현재 기본 파이프라인은 프레임 단위 Bronze와 이벤트 단위 Silver까지 지원한다. Gold 집계, 감정·키워드 분석, Spark 결과 조회 API는 아직 연결되어 있지 않다.
 
 실행 순서는 [README의 빠른 시작](../README.md#빠른-시작)을 참고한다.

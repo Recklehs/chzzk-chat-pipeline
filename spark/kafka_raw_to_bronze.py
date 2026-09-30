@@ -128,7 +128,7 @@ def load_runtime_settings(argv: list[str] | None = None) -> RuntimeSettings:
     )
 
 
-def create_spark_session(settings: RuntimeSettings | None = None):
+def create_spark_session(settings: RuntimeSettings | None = None, *, kafka: bool = True):
     import pyspark
     from delta import configure_spark_with_delta_pip
 
@@ -150,7 +150,7 @@ def create_spark_session(settings: RuntimeSettings | None = None):
         )
         .config("spark.databricks.delta.optimizeWrite.enabled", "true")
     )
-    extra_packages = [f"org.apache.spark:spark-sql-kafka-0-10_2.13:{pyspark.__version__}"]
+    extra_packages = [f"org.apache.spark:spark-sql-kafka-0-10_2.13:{pyspark.__version__}"] if kafka else []
 
     if resolved_settings.uses_gcs():
         builder = (
