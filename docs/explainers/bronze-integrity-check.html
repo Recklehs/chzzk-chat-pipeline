@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>번호표 검사</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: one narrow column of picture panels; the warehouse shelf grid is the recurring image */
+:root {
+  --bg: #f4f6f8;
+  --panel: #ffffff;
+  --ink: #18202c;
+  --muted: #5b6676;
+  --line: #d5dbe3;
+  --teal: #0b7f71;
+  --teal-soft: #d8f0ec;
+  --coral: #c8452e;
+  --coral-soft: #fbe2dc;
+  --amber: #b9770e;
+  --amber-soft: #fbecd2;
+  --display: "Black Han Sans", "Noto Sans KR", system-ui, sans-serif;
+  --body: "Noto Sans KR", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11161d; --panel: #1a212b; --ink: #e8edf3; --muted: #9aa6b5; --line: #2e3845;
+    --teal: #3cc4b0; --teal-soft: #173a36; --coral: #f07a62; --coral-soft: #3d2420;
+    --amber: #e9b04f; --amber-soft: #3a2e17; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11161d; --panel: #1a212b; --ink: #e8edf3; --muted: #9aa6b5; --line: #2e3845;
+  --teal: #3cc4b0; --teal-soft: #173a36; --coral: #f07a62; --coral-soft: #3d2420;
+  --amber: #e9b04f; --amber-soft: #3a2e17; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 17px; line-height: 1.6; }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 40px 64px; display: grid; gap: 28px; }
+h1, h2 { font-family: var(--display); font-weight: 400; letter-spacing: 0.01em; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(34px, 7vw, 52px); line-height: 1.15; }
+h2 { font-size: clamp(24px, 4.6vw, 32px); line-height: 1.2; }
+.lead { color: var(--muted); margin: 10px 0 0; max-width: 34em; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 24px 20px; display: grid; gap: 14px; min-width: 0; }
+.panel p { margin: 0; max-width: 36em; }
+.tag { font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em; color: var(--muted); text-transform: uppercase; }
+svg { width: 100%; height: auto; display: block; }
+svg text { font-family: var(--body); }
+.t-ink { fill: var(--ink); } .t-muted { fill: var(--muted); } .t-teal { fill: var(--teal); }
+.t-coral { fill: var(--coral); } .t-amber { fill: var(--amber); } .t-panel { fill: var(--panel); }
+.mono { font-family: var(--mono) !important; } .disp { font-family: var(--display) !important; }
+.box { fill: var(--panel); stroke: var(--line); stroke-width: 2; }
+.box-teal { fill: var(--teal-soft); stroke: var(--teal); stroke-width: 2; }
+.box-coral { fill: var(--coral-soft); stroke: var(--coral); stroke-width: 2; }
+.box-amber { fill: var(--amber-soft); stroke: var(--amber); stroke-width: 2; }
+.arrow { stroke: var(--muted); stroke-width: 3; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.fill-teal { fill: var(--teal); } .fill-coral { fill: var(--coral); } .fill-muted { fill: var(--muted); }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.two > div { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.two p { font-size: 15px; color: var(--muted); }
+/* shelves */
+.modes { display: flex; flex-wrap: wrap; gap: 8px; }
+.modes button { font: inherit; font-weight: 700; font-size: 15px; border-radius: 999px; padding: 10px 16px; cursor: pointer;
+  border: 2px solid var(--ink); background: var(--panel); color: var(--ink); }
+.modes button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
+.modes button:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+.incoming { font-family: var(--mono); font-size: 15px; padding: 10px 14px; border-radius: 10px; background: var(--amber-soft); color: var(--ink); border: 2px solid var(--amber); justify-self: start; }
+.shelves { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 520px) { .shelves { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.shelf { border: 2px solid var(--line); border-radius: 10px; padding: 8px 8px 10px; display: grid; gap: 2px; background: var(--panel); min-width: 0; }
+.shelf .d { font-size: 12px; color: var(--muted); }
+.shelf .r { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.shelf .s { font-size: 12px; font-weight: 700; color: var(--muted); }
+.shelf.open { border-color: var(--teal); background: var(--teal-soft); }
+.shelf.open .s { color: var(--teal); }
+.shelf.hit { border-color: var(--coral); background: var(--coral-soft); }
+.shelf.hit .s { color: var(--coral); }
+.result { font-weight: 700; padding: 12px 14px; border-radius: 12px; border: 2px solid var(--teal); background: var(--teal-soft); }
+.result.bad { border-color: var(--coral); background: var(--coral-soft); }
+.count { font-family: var(--display); font-size: 28px; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: no-preference) { .shelf, .result { transition: background .25s, border-color .25s; } }
+</style>
+</head>
+<body>
+
+<main class="wrap">
+  <header>
+    <div class="tag">CHZZK 파이프라인 · Silver 입구 검사</div>
+    <h1>같은 번호표,<br>다른 상자</h1>
+    <p class="lead">Silver가 쓰기 전에 하는 검사가 무엇을 막고, 어떻게 막는지 그림으로 봅니다.</p>
+  </header>
+
+  <!-- 1 -->
+  <section class="panel" aria-labelledby="p1">
+    <div class="tag">먼저 알아둘 것</div>
+    <h2 id="p1">Kafka는 메시지마다 번호표를 붙입니다</h2>
+    <svg viewBox="0 0 720 190" role="img" aria-label="메시지 상자에 0, 1, 2, 3, 4, 5 번호가 차례로 붙어 Bronze 창고에 들어감">
+      <g>
+        <rect class="box" x="10" y="40" width="80" height="70" rx="10"/><text class="t-ink disp" x="50" y="86" text-anchor="middle" font-size="28">0</text>
+        <rect class="box" x="100" y="40" width="80" height="70" rx="10"/><text class="t-ink disp" x="140" y="86" text-anchor="middle" font-size="28">1</text>
+        <rect class="box" x="190" y="40" width="80" height="70" rx="10"/><text class="t-ink disp" x="230" y="86" text-anchor="middle" font-size="28">2</text>
+        <rect class="box" x="280" y="40" width="80" height="70" rx="10"/><text class="t-ink disp" x="320" y="86" text-anchor="middle" font-size="28">3</text>
+        <rect class="box" x="370" y="40" width="80" height="70" rx="10"/><text class="t-ink disp" x="410" y="86" text-anchor="middle" font-size="28">4</text>
+        <rect class="box-amber" x="460" y="40" width="80" height="70" rx="10"/><text class="t-amber disp" x="500" y="86" text-anchor="middle" font-size="28">5</text>
+      </g>
+      <path class="arrow" d="M552 75 h40 m-10 -10 l10 10 l-10 10"/>
+      <rect class="box" x="600" y="20" width="110" height="110" rx="14"/>
+      <text class="t-ink disp" x="655" y="70" text-anchor="middle" font-size="20">Bronze</text>
+      <text class="t-muted" x="655" y="96" text-anchor="middle" font-size="14">창고</text>
+      <text class="t-muted" x="275" y="150" text-anchor="middle" font-size="15">번호(오프셋)는 0부터 하나씩 늘어남</text>
+      <text class="t-amber" x="500" y="180" text-anchor="middle" font-size="15" font-weight="700">“5번 = 안녕하세요”</text>
+    </svg>
+    <p>Silver는 채팅 하나하나를 이 <b>번호표</b>로 구분합니다. 그래서 “5번 상자에는 언제나 같은 내용이 들어 있다”는 약속이 꼭 지켜져야 합니다.</p>
+  </section>
+
+  <!-- 2 -->
+  <section class="panel" aria-labelledby="p2">
+    <div class="tag">막으려는 문제</div>
+    <h2 id="p2">번호가 0부터 다시 시작되면</h2>
+    <svg viewBox="0 0 720 260" role="img" aria-label="Kafka 토픽을 다시 만들면 번호가 0부터 다시 시작해, 창고에 3주 전 5번과 오늘 5번이 함께 들어감">
+      <rect class="box" x="10" y="20" width="220" height="90" rx="14"/>
+      <text class="t-ink" x="120" y="56" text-anchor="middle" font-size="15" font-weight="700">Kafka 토픽을 지우고</text>
+      <text class="t-ink" x="120" y="80" text-anchor="middle" font-size="15" font-weight="700">다시 만듦</text>
+      <text class="t-muted" x="120" y="100" text-anchor="middle" font-size="12">예: docker compose down -v</text>
+      <rect class="box" x="10" y="130" width="220" height="90" rx="14"/>
+      <text class="t-ink" x="120" y="166" text-anchor="middle" font-size="15" font-weight="700">Bronze 체크포인트만</text>
+      <text class="t-ink" x="120" y="190" text-anchor="middle" font-size="15" font-weight="700">지우고 재시작</text>
+      <text class="t-muted" x="120" y="210" text-anchor="middle" font-size="12">창고(테이블)는 그대로 둠</text>
+      <path class="arrow" d="M240 120 h40 m-10 -10 l10 10 l-10 10"/>
+      <!-- warehouse with two #5 -->
+      <rect class="box" x="290" y="20" width="420" height="200" rx="16"/>
+      <text class="t-ink disp" x="310" y="52" font-size="20">Bronze 창고</text>
+      <rect class="box-amber" x="310" y="72" width="180" height="120" rx="12"/>
+      <text class="t-amber disp" x="400" y="118" text-anchor="middle" font-size="36">5</text>
+      <text class="t-ink" x="400" y="148" text-anchor="middle" font-size="15">안녕하세요</text>
+      <text class="t-muted" x="400" y="172" text-anchor="middle" font-size="13">3주 전 · 채널 A</text>
+      <rect class="box-coral" x="510" y="72" width="180" height="120" rx="12"/>
+      <text class="t-coral disp" x="600" y="118" text-anchor="middle" font-size="36">5</text>
+      <text class="t-ink" x="600" y="148" text-anchor="middle" font-size="15">ㅋㅋㅋ</text>
+      <text class="t-muted" x="600" y="172" text-anchor="middle" font-size="13">오늘 · 채널 B</text>
+      <text class="t-coral" x="500" y="250" text-anchor="middle" font-size="16" font-weight="700">같은 번호표, 다른 상자</text>
+    </svg>
+    <p>Spark는 1단계에서 “번호가 뒤로 갔다”며 한 번 멈춰 줍니다. 그런데 사람이 2단계처럼 <b>반쯤만 초기화</b>하면 창고에 5번이 두 개 생깁니다. 지금까지 일어난 적은 없는 실수입니다.</p>
+  </section>
+
+  <!-- 3 -->
+  <section class="panel" aria-labelledby="p3">
+    <div class="tag">검사가 없으면</div>
+    <h2 id="p3">Silver는 이렇게 헷갈립니다</h2>
+    <div class="two">
+      <div>
+        <svg viewBox="0 0 320 200" role="img" aria-label="옛 5번이 Silver에 채팅으로 있었으면, 내용이 달라 둘 다 격리하고 멀쩡한 옛 채팅을 지움">
+          <rect class="box-amber" x="10" y="20" width="130" height="64" rx="10"/>
+          <text class="t-ink" x="75" y="48" text-anchor="middle" font-size="14">Silver의 5번</text>
+          <text class="t-amber" x="75" y="70" text-anchor="middle" font-size="14" font-weight="700">안녕하세요</text>
+          <rect class="box-coral" x="180" y="20" width="130" height="64" rx="10"/>
+          <text class="t-ink" x="245" y="48" text-anchor="middle" font-size="14">새로 온 5번</text>
+          <text class="t-coral" x="245" y="70" text-anchor="middle" font-size="14" font-weight="700">ㅋㅋㅋ</text>
+          <text class="t-coral disp" x="160" y="62" text-anchor="middle" font-size="22">≠</text>
+          <path class="arrow" d="M160 96 v26 m-10 -10 l10 10 l10 -10"/>
+          <rect class="box-coral" x="40" y="132" width="240" height="56" rx="12"/>
+          <text class="t-coral" x="160" y="156" text-anchor="middle" font-size="14" font-weight="700">“뭐가 맞지?” → 둘 다 격리</text>
+          <text class="t-ink" x="160" y="177" text-anchor="middle" font-size="13">멀쩡한 3주 전 채팅이 사라짐</text>
+        </svg>
+        <b>옛 5번이 채팅이었다면</b>
+        <p>Silver도 다르다는 건 알아챕니다. 하지만 어느 쪽이 맞는지 모르니 둘 다 빼 버립니다. 정상 과거 데이터가 분석에서 조용히 빠집니다.</p>
+      </div>
+      <div>
+        <svg viewBox="0 0 320 200" role="img" aria-label="옛 5번이 Silver에 없었으면, 새 5번이 그냥 저장되고 나중에 원본을 찾으면 두 개가 나옴">
+          <rect class="box" x="10" y="20" width="130" height="64" rx="10" stroke-dasharray="6 5"/>
+          <text class="t-ink" x="75" y="48" text-anchor="middle" font-size="14">Silver의 5번</text>
+          <text class="t-muted" x="75" y="70" text-anchor="middle" font-size="13">없음 (차단 이벤트)</text>
+          <rect class="box-coral" x="180" y="20" width="130" height="64" rx="10"/>
+          <text class="t-ink" x="245" y="48" text-anchor="middle" font-size="14">새로 온 5번</text>
+          <text class="t-coral" x="245" y="70" text-anchor="middle" font-size="14" font-weight="700">ㅋㅋㅋ</text>
+          <path class="arrow" d="M160 96 v26 m-10 -10 l10 10 l10 -10"/>
+          <rect class="box-amber" x="40" y="132" width="240" height="56" rx="12"/>
+          <text class="t-amber" x="160" y="156" text-anchor="middle" font-size="14" font-weight="700">그냥 저장됨</text>
+          <text class="t-ink" x="160" y="177" text-anchor="middle" font-size="13">“5번 원본?” → 창고에 두 개</text>
+        </svg>
+        <b>옛 5번이 Silver에 없었다면</b>
+        <p>아무도 모르고 넘어갑니다. 나중에 이 채팅의 원본을 찾으려고 하면 상자가 두 개라 어느 쪽인지 알 수 없습니다.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="panel" aria-labelledby="p4">
+    <div class="tag">검사가 하는 일</div>
+    <h2 id="p4">쓰기 전에 창고와 대조하고, 다르면 멈춥니다</h2>
+    <svg viewBox="0 0 720 220" role="img" aria-label="새 배치의 번호를 Bronze 창고와 대조. 같은 번호에 내용이 같으면 통과, 다르면 멈추고 아무것도 쓰지 않음">
+      <rect class="box-amber" x="10" y="70" width="150" height="70" rx="12"/>
+      <text class="t-ink" x="85" y="100" text-anchor="middle" font-size="15" font-weight="700">새로 온 배치</text>
+      <text class="t-muted mono" x="85" y="124" text-anchor="middle" font-size="13">번호 5, 6, 7…</text>
+      <path class="arrow" d="M168 105 h34 m-10 -10 l10 10 l-10 10"/>
+      <rect class="box" x="210" y="50" width="190" height="110" rx="14"/>
+      <text class="t-ink" x="305" y="88" text-anchor="middle" font-size="15" font-weight="700">창고에 같은 번호가</text>
+      <text class="t-ink" x="305" y="112" text-anchor="middle" font-size="15" font-weight="700">다른 내용으로 있나?</text>
+      <text class="t-muted" x="305" y="140" text-anchor="middle" font-size="13">Bronze와 대조</text>
+      <path class="arrow" d="M408 80 C440 80 440 40 470 40 m-10 -10 l10 10 l-10 10"/>
+      <path class="arrow" d="M408 130 C440 130 440 170 470 170 m-10 -10 l10 10 l-10 10"/>
+      <rect class="box-teal" x="478" y="10" width="232" height="62" rx="12"/>
+      <text class="t-teal" x="594" y="38" text-anchor="middle" font-size="15" font-weight="700">없음 → 통과</text>
+      <text class="t-ink" x="594" y="60" text-anchor="middle" font-size="13">정제해서 Silver에 저장</text>
+      <rect class="box-coral" x="478" y="140" width="232" height="62" rx="12"/>
+      <text class="t-coral" x="594" y="168" text-anchor="middle" font-size="15" font-weight="700">있음 → 배치 멈춤 ✋</text>
+      <text class="t-ink" x="594" y="190" text-anchor="middle" font-size="13">아무것도 안 씀, “Bronze 고쳐라”</text>
+    </svg>
+    <p>헷갈린 채로 지우거나 섞지 않고, <b>Silver에 손대기 전에 멈춥니다.</b> 사람이 Bronze를 바로잡고 다시 돌리면 됩니다. 재전송처럼 번호도 내용도 같은 경우는 문제없이 통과합니다.</p>
+  </section>
+
+  <!-- 5 -->
+  <section class="panel" aria-labelledby="p5">
+    <div class="tag">오늘 바꾼 것 · 실제 Bronze 파일 10개</div>
+    <h2 id="p5">창고 전체 대신, 번호가 걸치는 선반만 엽니다</h2>
+    <p>Bronze 파일마다 “이 파일엔 몇 번부터 몇 번까지 있다”가 기록돼 있습니다. 새 배치의 번호 범위와 겹치는 파일만 열어 봅니다.</p>
+    <div class="modes" role="group" aria-label="배치 종류">
+      <button type="button" id="m-normal" aria-pressed="true">평소 배치</button>
+      <button type="button" id="m-reset" aria-pressed="false">토픽을 다시 만든 뒤</button>
+      <button type="button" id="m-old" aria-pressed="false">예전 방식 (전부 열기)</button>
+    </div>
+    <div class="incoming" id="incoming">새 배치 번호: 88,081 ~ 88,130</div>
+    <div class="shelves" id="shelves"></div>
+    <div class="result" id="result" aria-live="polite"></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  // Active Bronze files measured on 2026-10-14: [date, min offset, max offset]
+  var files = [
+    ['9/19', 1, 1174], ['9/22', 1175, 14761], ['9/22', 14762, 29251], ['9/22', 29252, 44931], ['9/22', 44932, 59021],
+    ['9/22', 59022, 73495], ['9/22', 73496, 77415], ['9/23', 77416, 88122], ['9/23', 88123, 88124], ['9/23', 88125, 88130]
+  ];
+  var modes = {
+    normal: { lo: 88081, hi: 88130, all: false, label: '새 배치 번호: 88,081 ~ 88,130',
+      result: '3개만 열어서 확인 → 같은 번호에 다른 내용 없음 → 통과', bad: false },
+    reset: { lo: 0, hi: 49, all: false, label: '새 배치 번호: 0 ~ 49 (번호가 처음부터 다시 시작)',
+      result: '옛 파일(1~1,174번)이 범위에 걸려서 열림 → 1~49번이 다른 내용 → 배치 멈춤', bad: true },
+    old: { lo: 88081, hi: 88130, all: true, label: '새 배치 번호: 88,081 ~ 88,130',
+      result: '범위와 상관없이 10개를 전부 열어서 확인 (Bronze가 커질수록 느려짐)', bad: false }
+  };
+  var fmt = function (n) { return n.toLocaleString('ko-KR'); };
+  var shelves = document.getElementById('shelves');
+  files.forEach(function (f) {
+    var el = document.createElement('div');
+    el.className = 'shelf';
+    el.innerHTML = '<span class="d">' + f[0] + '</span><span class="r">' + fmt(f[1]) + '<br>~' + fmt(f[2]) + '</span><span class="s"></span>';
+    shelves.appendChild(el);
+  });
+  function show(name) {
+    var m = modes[name], opened = 0;
+    Object.keys(modes).forEach(function (k) { document.getElementById('m-' + k).setAttribute('aria-pressed', String(k === name)); });
+    document.getElementById('incoming').textContent = m.label;
+    Array.prototype.forEach.call(shelves.children, function (el, i) {
+      var f = files[i], overlap = m.all || (f[1] <= m.hi && f[2] >= m.lo);
+      var hit = m.bad && overlap;
+      if (overlap) opened++;
+      el.className = 'shelf' + (hit ? ' hit' : overlap ? ' open' : '');
+      el.querySelector('.s').textContent = hit ? '열어봄 · 충돌!' : overlap ? '열어봄' : '건너뜀';
+    });
+    var r = document.getElementById('result');
+    r.className = 'result' + (m.bad ? ' bad' : '');
+    r.innerHTML = '<span class="count">' + opened + ' / 10</span> 파일 열어봄<br>' + m.result;
+  }
+  Object.keys(modes).forEach(function (k) { document.getElementById('m-' + k).addEventListener('click', function () { show(k); }); });
+  show('normal');
+})();
+</script>
+</body>
+</html>
