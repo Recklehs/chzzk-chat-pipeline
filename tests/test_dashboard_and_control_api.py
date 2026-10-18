@@ -666,10 +666,12 @@ def test_channel_store_adds_channel_name_column_for_existing_db(tmp_path):
         connection.commit()
 
     store = collector.ChannelStore(str(db_path))
-    store.upsert_channel("channel-1", "alias-1", True, channel_name="공식 이름")
+    store.upsert_channel("channel-1", "alias-1", True, channel_name="공식 이름", channel_image_url="https://example.com/p.png")
+    store.upsert_channel("channel-1", "alias-1", False)
     stored = store.get_channel("channel-1")
 
     assert stored.channel_name == "공식 이름"
+    assert stored.channel_image_url == "https://example.com/p.png"
 
     with sqlite3.connect(db_path) as connection:
         table_names = {

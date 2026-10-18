@@ -87,6 +87,7 @@ class StoredChannel:
     channel_id: str
     alias: str
     channel_name: str | None
+    channel_image_url: str | None
     enabled: bool
     last_live_status: str | None
     last_live_title: str | None
@@ -116,6 +117,7 @@ class ResolvedControlChannel:
     channel_id: str
     alias: str
     channel_name: str | None
+    channel_image_url: str | None
     snapshot: "LiveSnapshot"
 
 
@@ -289,6 +291,7 @@ class ChannelStore:
                         channel_id TEXT PRIMARY KEY,
                         alias TEXT NOT NULL DEFAULT '',
                         channel_name TEXT,
+                        channel_image_url TEXT,
                         enabled INTEGER NOT NULL DEFAULT 1,
                         last_live_status TEXT,
                         last_live_title TEXT,
@@ -322,6 +325,8 @@ class ChannelStore:
                 }
                 if "channel_name" not in columns:
                     connection.execute("ALTER TABLE monitored_channels ADD COLUMN channel_name TEXT")
+                if "channel_image_url" not in columns:
+                    connection.execute("ALTER TABLE monitored_channels ADD COLUMN channel_image_url TEXT")
                 connection.commit()
 
     @staticmethod
@@ -332,6 +337,7 @@ class ChannelStore:
             channel_id=row["channel_id"],
             alias=row["alias"],
             channel_name=row["channel_name"],
+            channel_image_url=row["channel_image_url"],
             enabled=bool(row["enabled"]),
             last_live_status=row["last_live_status"],
             last_live_title=row["last_live_title"],
@@ -364,7 +370,7 @@ class ChannelStore:
             with self._connect() as connection:
                 rows = connection.execute(
                     """
-                    SELECT channel_id, alias, channel_name, enabled, last_live_status, last_live_title,
+                    SELECT channel_id, alias, channel_name, channel_image_url, enabled, last_live_status, last_live_title,
                            last_open_date, last_close_date, last_checked_at, last_error,
                            viewer_count, created_at, updated_at
                     FROM monitored_channels
@@ -378,7 +384,7 @@ class ChannelStore:
             with self._connect() as connection:
                 row = connection.execute(
                     """
-                    SELECT channel_id, alias, channel_name, enabled, last_live_status, last_live_title,
+                    SELECT channel_id, alias, channel_name, channel_image_url, enabled, last_live_status, last_live_title,
                            last_open_date, last_close_date, last_checked_at, last_error,
                            viewer_count, created_at, updated_at
                     FROM monitored_channels
@@ -394,27 +400,30 @@ class ChannelStore:
         alias: str,
         enabled: bool,
         channel_name: str | None = None,
+        channel_image_url: str | None = None,
     ) -> StoredChannel:
         existing = self.get_channel(channel_id)
         timestamp = now_iso()
         created_at = existing.created_at if existing else timestamp
         resolved_alias = alias if alias is not None else (existing.alias if existing else "")
         resolved_channel_name = channel_name if channel_name is not None else (existing.channel_name if existing else None)
+        resolved_image_url = channel_image_url if channel_image_url is not None else (existing.channel_image_url if existing else None)
 
         with self._lock:
             with self._connect() as connection:
                 connection.execute(
                     """
                     INSERT INTO monitored_channels (
-                        channel_id, alias, channel_name, enabled, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        channel_id, alias, channel_name, channel_image_url, enabled, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(channel_id) DO UPDATE SET
                         alias = excluded.alias,
                         channel_name = excluded.channel_name,
+                        channel_image_url = excluded.channel_image_url,
                         enabled = excluded.enabled,
                         updated_at = excluded.updated_at
                     """,
-                    (channel_id, resolved_alias, resolved_channel_name, int(enabled), created_at, timestamp),
+                    (channel_id, resolved_alias, resolved_channel_name, resolved_image_url, int(enabled), created_at, timestamp),
                 )
                 connection.commit()
 
@@ -778,6 +787,7 @@ class MonitorCoordinator:
                             channel.alias,
                             channel.enabled,
                             channel_name=metadata.channel_name,
+                            channel_image_url=metadata.channel_image_url,
                         )
                 snapshot = await self.live_status_client.fetch(channel.channel_id)
                 self._last_live_poll_at[channel.channel_id] = now_ts
@@ -957,12 +967,18 @@ async def _resolve_control_channels(
             if metadata.valid
             else (existing.channel_name if existing is not None else None)
         )
+        resolved_image_url = (
+            metadata.channel_image_url
+            if metadata.valid
+            else (existing.channel_image_url if existing is not None else None)
+        )
 
         resolved.append(
             ResolvedControlChannel(
                 channel_id=channel_id,
                 alias=resolved_alias,
                 channel_name=resolved_channel_name,
+                channel_image_url=resolved_image_url,
                 snapshot=snapshot,
             )
         )
@@ -990,6 +1006,7 @@ async def apply_control_command(
                 item.alias,
                 True,
                 channel_name=item.channel_name,
+                channel_image_url=item.channel_image_url,
             )
             store.update_snapshot(item.channel_id, item.snapshot)
             await coordinator.reconcile_single_channel(item.channel_id, item.snapshot)
