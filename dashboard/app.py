@@ -23,14 +23,17 @@ def jsonable(row):
     return {k: v.isoformat() if isinstance(v, (datetime, date)) else v for k, v in row.items()}
 
 
-def read_table(gold_path, name, where=None):
+def open_table(gold_path, name):
     from deltalake import DeltaTable
     from deltalake.exceptions import TableNotFoundError
     try:
-        dataset = DeltaTable(f'{gold_path}/{name}').to_pyarrow_dataset()
+        return DeltaTable(f'{gold_path}/{name}')
     except TableNotFoundError as exc:
         raise HTTPException(503, 'Gold 테이블이 아직 없습니다. spark/silver_to_gold.py를 먼저 실행하세요.') from exc
-    return dataset.to_table(filter=where).to_pylist()
+
+
+def read_table(gold_path, name, where=None):
+    return open_table(gold_path, name).to_pyarrow_dataset().to_table(filter=where).to_pylist()
 
 
 def read_manifest(gold_path):
@@ -54,15 +57,35 @@ def minute_series(session, rows, computed_at):
     return points
 
 
-def sparkline(session, rows, computed_at, buckets=24):
-    """Chat counts folded into equal slices of the session, for the small trend line in the session list."""
-    start, end = session['started_at'], session['ended_at'] or computed_at
-    span = max((end - start).total_seconds(), 1)
-    values = [0] * buckets
-    for row in rows:
-        offset = (row['minute_start'] - start).total_seconds()
-        values[min(buckets - 1, max(0, int(offset / span * buckets)))] += row.get('chat_count') or 0
-    return values
+def sparklines(minutes, sessions, computed_at, buckets=24):
+    """Chat counts folded into equal slices of each session, for the small trend lines in the session list.
+
+    Reads three columns and aggregates in Arrow, so the Python work is per session, not per minute row.
+    """
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    result = {s['session_id']: [0] * buckets for s in sessions}
+    if not sessions:
+        return result
+    ids = pa.array([s['session_id'] for s in sessions], pa.int64())
+    starts = pa.array([micros(s['started_at']) for s in sessions], pa.int64())
+    spans = pa.array([max(micros(s['ended_at'] or computed_at) - micros(s['started_at']), 1) for s in sessions], pa.float64())
+    table = minutes.to_pyarrow_dataset().to_table(columns=['session_id', 'minute_start', 'chat_count'])
+    position = pc.index_in(table['session_id'], value_set=ids)
+    known = pc.is_valid(position)
+    table, position = table.filter(known), position.filter(known)
+    offset = pc.subtract(pc.cast(table['minute_start'], pa.int64()), pc.take(starts, position))
+    bucket = pc.cast(pc.floor(pc.multiply(pc.divide(pc.cast(offset, pa.float64()), pc.take(spans, position)), buckets)), pa.int64())
+    bucket = pc.min_element_wise(pc.max_element_wise(bucket, 0), buckets - 1)
+    grouped = (pa.table({'session_id': table['session_id'], 'bucket': bucket, 'chats': pc.fill_null(table['chat_count'], 0)})
+               .group_by(['session_id', 'bucket']).aggregate([('chats', 'sum')]))
+    for session_id, slot, chats in zip(*(grouped[c].to_pylist() for c in ('session_id', 'bucket', 'chats_sum'))):
+        result[session_id][slot] = chats
+    return result
+
+
+def micros(value):
+    return (value - datetime(1970, 1, 1, tzinfo=timezone.utc)) // timedelta(microseconds=1)
 
 
 def empty_runs(points, threshold):
@@ -79,12 +102,19 @@ def empty_runs(points, threshold):
     return runs
 
 
-def fetch_live(collector_url, timeout=1.0):
-    with urllib.request.urlopen(f'{collector_url.rstrip("/")}/channels', timeout=timeout) as response:
-        payload = json.load(response)
+def live_channels(payload):
+    """Collector /channels payload -> live rate rows; anything else is a ValueError the endpoint reports as offline."""
+    channels = payload.get('channels') if isinstance(payload, dict) else None
+    if not isinstance(channels, list) or not all(isinstance(c, dict) and c.get('channel_id') for c in channels):
+        raise ValueError('Unexpected Collector /channels response')
     return [{'channel_id': c['channel_id'], 'display_name': c.get('display_name') or c['channel_id'],
              'monitoring_status': c.get('monitoring_status'), 'recent_events_per_minute': c.get('recent_events_per_minute') or 0}
-            for c in payload.get('channels', [])]
+            for c in channels]
+
+
+def fetch_live(collector_url, timeout=1.0):
+    with urllib.request.urlopen(f'{collector_url.rstrip("/")}/channels', timeout=timeout) as response:
+        return live_channels(json.load(response))
 
 
 def create_app(gold_path=None, collector_url=None, refresh_seconds=None, live=fetch_live):
@@ -92,6 +122,7 @@ def create_app(gold_path=None, collector_url=None, refresh_seconds=None, live=fe
     collector_url = collector_url or os.environ.get('COLLECTOR_URL', 'http://127.0.0.1:8000')
     refresh_seconds = refresh_seconds or int(os.environ.get('GOLD_DASHBOARD_REFRESH_SECONDS', '10'))
     app = FastAPI(title='CHZZK Broadcast Analytics')
+    listing = {}  # the last /api/sessions body and the Gold versions it was built from, shared by every open tab
 
     def computed_at(manifest):
         value = manifest.get('computed_at')
@@ -105,15 +136,16 @@ def create_app(gold_path=None, collector_url=None, refresh_seconds=None, live=fe
     @app.get('/api/sessions')
     def sessions():
         manifest = read_manifest(gold_path)
-        rows = sorted(read_table(gold_path, 'broadcast_sessions'), key=lambda r: r['started_at'], reverse=True)
-        by_session = {}
-        for minute in read_table(gold_path, 'channel_minute_activity'):
-            by_session.setdefault(minute['session_id'], []).append(minute)
-        end = computed_at(manifest)
-        return {'computed_at': manifest.get('computed_at'), 'mode': manifest.get('mode'),
-                'gap_minutes': manifest.get('gap_minutes'),
-                'sessions': [{**jsonable(r), 'sparkline': sparkline(r, by_session.get(r['session_id'], []), end)}
-                             for r in rows]}
+        tables = open_table(gold_path, 'broadcast_sessions'), open_table(gold_path, 'channel_minute_activity')
+        # Gold rewrites rows every trigger; between writes every poll gets the cached body.
+        key = (tables[0].version(), tables[1].version(), manifest.get('computed_at'))
+        if listing.get('key') != key:
+            rows = sorted(tables[0].to_pyarrow_dataset().to_table().to_pylist(), key=lambda r: r['started_at'], reverse=True)
+            trends = sparklines(tables[1], rows, computed_at(manifest))
+            listing.update(key=key, body={
+                'computed_at': manifest.get('computed_at'), 'mode': manifest.get('mode'), 'gap_minutes': manifest.get('gap_minutes'),
+                'sessions': [{**jsonable(r), 'sparkline': trends[r['session_id']]} for r in rows]})
+        return listing['body']
 
     @app.get('/api/sessions/{session_id}')
     def session_detail(session_id: int):
@@ -133,7 +165,7 @@ def create_app(gold_path=None, collector_url=None, refresh_seconds=None, live=fe
         # The Collector's in-memory stats are the fast path; Gold stays the source of exact numbers.
         try:
             return {'available': True, 'channels': live(collector_url)}
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError):
             return {'available': False, 'channels': []}
 
     return app

@@ -7,7 +7,7 @@ import pytest
 from deltalake import write_deltalake
 from fastapi.testclient import TestClient
 
-from dashboard.app import create_app
+from dashboard.app import create_app, live_channels
 
 UTC = timezone.utc
 
@@ -79,6 +79,36 @@ def test_live_rate_comes_from_collector_and_degrades_when_it_is_down(tmp_path):
     def down(_url):
         raise OSError('connection refused')
     assert client(str(tmp_path), live=down).get('/api/live').json() == {'available': False, 'channels': []}
+    def odd(_url):
+        return live_channels(['not', 'a', 'dict'])
+    assert client(str(tmp_path), live=odd).get('/api/live').json() == {'available': False, 'channels': []}
+
+
+def test_collector_payload_shape_is_checked():
+    assert live_channels({'channels': [{'channel_id': 'a'}]})[0]['display_name'] == 'a'
+    for payload in (['channels'], {'channels': {'a': 1}}, {'channels': ['a']}, {'channels': [{'name': 'no id'}]}):
+        with pytest.raises(ValueError, match='Collector'):
+            live_channels(payload)
+
+
+def test_ongoing_sparkline_and_missing_manifest(tmp_path):
+    body = client(gold(tmp_path)).get('/api/sessions').json()
+    assert body['sessions'][0]['sparkline'] == [0] * 24  # ongoing session 2 has no minute rows yet
+    (tmp_path / '_gold_manifest.json').unlink()
+    body = client(str(tmp_path)).get('/api/sessions').json()
+    assert body['computed_at'] is None and len(body['sessions']) == 2
+
+
+def test_session_list_is_cached_until_gold_changes(tmp_path):
+    path = gold(tmp_path)
+    app = client(path)
+    first = app.get('/api/sessions').json()['sessions'][1]['sparkline']
+    late = {'channel_id': 'a', 'minute_start': at(10, 7), 'session_id': 1, 'chat_count': 5, 'blinded_chat_count': 0,
+            'unique_chatters': 1, 'donation_count': 0, 'donation_amount_currency': 0,
+            'subscription_notification_count': 0, 'subscription_gift_count': 0}
+    write_deltalake(str(tmp_path / 'channel_minute_activity'), pa.Table.from_pylist([late]), mode='append')
+    second = app.get('/api/sessions').json()['sessions'][1]['sparkline']
+    assert sum(first) == 3 and sum(second) == 8
 
 
 def test_page_renders_refresh_interval_and_collector_link(tmp_path):
