@@ -4,8 +4,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from spark.silver_to_gold import (changed_sessions, load_settings, loose_ranges, micros, read_sessions,
-                                  replace_conditions, seconds)
+from spark.silver_to_gold import changed_sessions, load_settings, micros, read_sessions, replace_conditions, seconds
 
 NOW = datetime(2026, 9, 23, 5, 0, tzinfo=timezone.utc)
 
@@ -67,9 +66,7 @@ def test_refresh_targets_ongoing_new_and_changed_sessions_only():
 
 
 def test_replace_conditions_cover_sessions_and_session_less_minute_ranges():
-    loose = loose_ranges([('abc', 120_000_000), ('abc', 60_000_000), ('xyz', 0)])
-    assert loose == {'abc': (60_000_000, 120_000_000), 'xyz': (0, 0)}
-    minutes, sessions = replace_conditions({2, 1}, {'abc': loose['abc']})
+    minutes, sessions = replace_conditions({2, 1}, {'abc': (60_000_000, 120_000_000)})
     assert sessions == 'session_id IN (1, 2)'
     assert minutes == ("session_id IN (1, 2) OR (session_id IS NULL AND ((channel_id = 'abc' AND minute_start "
                        "BETWEEN timestamp_micros(60000000) AND timestamp_micros(120000000))))")

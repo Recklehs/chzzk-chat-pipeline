@@ -110,15 +110,6 @@ def changed_sessions(sessions, stored):
             if s['ended_at'] is None or stored.get(s['session_id']) != (micros(s['ended_at']), s['stop_reason'], s['channel_name'])}
 
 
-def loose_ranges(minutes):
-    """Session-less (channel, minute) keys folded into one inclusive minute range per channel."""
-    ranges = {}
-    for channel, minute in minutes:
-        low, high = ranges.get(channel, (minute, minute))
-        ranges[channel] = (min(low, minute), max(high, minute))
-    return ranges
-
-
 def replace_conditions(session_ids, loose):
     """Delta replaceWhere predicates for the rows one incremental refresh rewrites.
 
@@ -262,11 +253,16 @@ def refresh(spark, silver_path, gold_path, control_db, events=None, now=None):
     affected = changed_sessions(sessions, stored)
     loose = {}
     if events is not None:
+        # Reduce in Spark: an empty checkpoint replays all of Silver, so collect one row per session or channel.
         keys = (assign_sessions(spark, events.select('channel_id', 'event_time'), sessions)
-                .select('session_id', 'channel_id', F.unix_micros(F.date_trunc('minute', 'event_time')).alias('minute_us'))
-                .distinct().collect())
-        affected |= {k.session_id for k in keys if k.session_id is not None}
-        loose = loose_ranges((k.channel_id, k.minute_us) for k in keys if k.session_id is None)
+                .withColumn('minute_us', F.unix_micros(F.date_trunc('minute', 'event_time'))).cache())
+        try:
+            affected |= {r.session_id for r in keys.filter('session_id IS NOT NULL').select('session_id').distinct().collect()}
+            # Session-less minutes fold into one inclusive range per channel.
+            loose = {r.channel_id: (r.low, r.high) for r in keys.filter('session_id IS NULL').groupBy('channel_id')
+                     .agg(F.min('minute_us').alias('low'), F.max('minute_us').alias('high')).collect()}
+        finally:
+            keys.unpersist()
     minutes_where, sessions_where = replace_conditions(affected, loose)
     if minutes_where is not None:
         touched = [s for s in sessions if s['session_id'] in affected]
