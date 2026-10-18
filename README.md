@@ -295,6 +295,12 @@ source .venv/bin/activate
 
 전체를 다시 계산해야 할 때는 Silver와 Gold 스트림을 멈춘 뒤 `--full`로 한 번 실행합니다. 집계 규칙을 바꿨을 때, 또는 Silver 로그의 `removed`가 0보다 클 때(후원·선물 충돌로 이미 끝난 회차의 행이 지워진 경우) 필요합니다.
 
+운영 주기: 하루 방송이 모두 끝난 뒤 Silver 로그에서 `"removed":0`이 아닌 배치가 있었는지 확인하고, 있으면 `--full`을 한 번 실행합니다. 진행 중인 회차의 삭제는 스트림이 자동으로 반영하므로 끝난 회차만 대상입니다.
+
+```bash
+grep -h '\[spark-silver\]' data/logs/silver-*.log | grep -v '"removed":0'
+```
+
 ```bash
 .venv/bin/spark-submit --properties-file spark/conf/local.properties \
   spark/silver_to_gold.py --properties-file spark/conf/local.properties --full

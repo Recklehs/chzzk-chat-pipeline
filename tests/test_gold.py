@@ -1,10 +1,11 @@
 """Gold session input contracts; Spark aggregation is covered by tests/check_gold.py."""
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from spark.silver_to_gold import changed_sessions, load_settings, micros, read_sessions, replace_conditions, seconds
+from spark.silver_to_gold import (EPOCH, changed_sessions, load_settings, micros, read_sessions, replace_conditions,
+                                  seconds, widen_loose)
 
 NOW = datetime(2026, 9, 23, 5, 0, tzinfo=timezone.utc)
 
@@ -55,14 +56,30 @@ def test_back_to_back_sessions_and_missing_db(tmp_path):
 
 
 def test_refresh_targets_ongoing_new_and_changed_sessions_only():
-    ended = datetime(2026, 9, 22, 18, 0, tzinfo=timezone.utc)
-    def session(session_id, ended_at, reason='BROADCAST_ENDED'):
-        return {'session_id': session_id, 'ended_at': ended_at, 'stop_reason': reason, 'channel_name': 'name'}
-    sessions = [session(1, ended), session(2, None), session(3, ended), session(4, ended)]
-    stored = {1: (micros(ended), 'BROADCAST_ENDED', 'name'), 2: (None, None, 'name'),
-              4: (micros(ended), 'SERVER_SHUTDOWN', 'name')}
-    # 1 is unchanged; 2 is still live, 3 is not in Gold yet, 4 has a corrected Collector record.
-    assert changed_sessions(sessions, stored) == {2, 3, 4}
+    start, ended = datetime(2026, 9, 22, 17, 0, tzinfo=timezone.utc), datetime(2026, 9, 22, 18, 0, tzinfo=timezone.utc)
+    def session(session_id, ended_at, reason='BROADCAST_ENDED', started_at=start):
+        return {'session_id': session_id, 'started_at': started_at, 'ended_at': ended_at,
+                'stop_reason': reason, 'channel_name': 'name'}
+    sessions = [session(1, ended), session(2, None), session(3, ended), session(4, ended),
+                session(5, ended, started_at=start + timedelta(minutes=5))]
+    stored = {i: {'record': (micros(start), micros(ended), 'BROADCAST_ENDED', 'name')} for i in (1, 5)}
+    stored[2] = {'record': (micros(start), None, None, 'name')}
+    stored[4] = {'record': (micros(start), micros(ended), 'SERVER_SHUTDOWN', 'name')}
+    # 1 is unchanged; 2 is live, 3 is not in Gold yet, 4 has a corrected end reason, 5 a corrected start.
+    assert changed_sessions(sessions, stored) == {2, 3, 4, 5}
+
+
+def test_rewritten_sessions_also_rewrite_session_less_rows_their_boundaries_moved():
+    minute = 60_000_000
+    def at(m):
+        return EPOCH + timedelta(minutes=m)
+    def session(session_id, channel, start, end):
+        return {'session_id': session_id, 'channel_id': channel, 'started_at': at(start), 'effective_end': at(end)}
+    sessions = [session(1, 'a', 10, 20), session(2, 'b', 100, 130), session(3, 'c', 0, 5)]
+    # Session 1 used to reach a 25-minute event; its end moved to 20, so minutes up to 25 become session-less.
+    stored = {1: {'events': (10 * minute, 25 * minute)}}
+    loose = widen_loose({'b': (90 * minute, 95 * minute)}, sessions, {1, 2}, stored)
+    assert loose == {'a': (10 * minute, 25 * minute), 'b': (90 * minute, 129 * minute)}
 
 
 def test_replace_conditions_cover_sessions_and_session_less_minute_ranges():

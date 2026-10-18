@@ -106,22 +106,32 @@ def main():
             try:
                 query.processAllAvailable()
                 matches_full('the first batch')
-                # A late chat for ended session 1, one more chat in session 3, and a chat between sessions 1 and 2.
+                # A late chat for ended session 1, one more chat in session 3, a chat between sessions 1 and 2,
+                # and a chat in ongoing session 2 that a later Collector end time will leave outside the session.
                 silver([at(MS+5*MINUTE,message(msgTime=MS+5*MINUTE,uid='u3',profile=None)),
+                        at(MS+45*MINUTE,message(msgTime=MS+45*MINUTE,uid='u5',profile=None)),
                         frame([message(msgTime=MS+2*MINUTE+5000,uid='u8',profile=None)],channel_id='other',
                               kafka_timestamp_ms=MS+2*MINUTE+5000),
                         at(MS+27*MINUTE,message(msgTime=MS+27*MINUTE,uid='u4',profile=None))],1)
                 query.processAllAvailable()
                 matches_full('late, cross-channel and session-less events')
                 print('Gold stream refresh of touched sessions matches a full recompute.',flush=True)
-                # Session 2 ends in the Collector record with no new event; the timer path picks it up.
+                # Session 2 ends at 00:40 in the Collector record with no new event; the timer path picks it up.
+                # Its 00:45 chat now falls outside every session and must move to a session-less row, not vanish.
                 with closing(sqlite3.connect(db)) as con:
-                    con.execute("UPDATE monitoring_sessions SET ended_at='2026-09-23T00:50:00+09:00', stop_reason='BROADCAST_ENDED' WHERE id=2")
+                    con.execute("UPDATE monitoring_sessions SET ended_at='2026-09-23T00:40:00+09:00', stop_reason='BROADCAST_ENDED' WHERE id=2")
                     con.commit()
                 refresh(spark,silver_path,gold_path,db,now=NOW)
                 two=table('broadcast_sessions').filter('session_id = 2').first()
-                assert two.ended_at is not None and two.duration_minutes==20 and two.data_status=='NO_DATA', two
-                matches_full('a session end without events')
+                assert two.ended_at is not None and two.duration_minutes==10 and two.data_status=='NO_DATA', two
+                matches_full('a session end that leaves an event outside the session')
+                # A session recorded later covers the 00:27 chat that was session-less; it moves, not doubles.
+                with closing(sqlite3.connect(db)) as con:
+                    con.execute("INSERT INTO monitoring_sessions VALUES (4,'channel','one','2026-09-23T00:26:00+09:00','2026-09-23T00:28:00+09:00','BROADCAST_ENDED')")
+                    con.commit()
+                refresh(spark,silver_path,gold_path,db,now=NOW)
+                assert table('broadcast_sessions').filter('session_id = 4').first().chat_count==1
+                matches_full('a new session covering a session-less event')
                 print('Gold timer refresh closes a session that received no events.',flush=True)
                 # A Silver business-key conflict deletes d1. The stream skips that commit instead of failing,
                 # so ended session 1 keeps the stale donation until --full reconciles it.

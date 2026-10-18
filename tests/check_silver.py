@@ -32,6 +32,8 @@ def main():
             silver_store.validate_bronze_source(df([]), root+'/nonexistent-bronze')
             # A discarded business duplicate, an empty body and an out-of-scope frame
             # must not hide changed content at an existing Kafka coordinate.
+            # Appending changed content at an old offset is what a recreated Kafka topic does; the batch's
+            # offset range still covers the original file, so the range-pruned check must reject it.
             source_path=root+'/integrity-bronze'
             original=df([frame([donation()],cmd=93102,offset=0),
                          frame([donation()],cmd=93102,offset=1)])
