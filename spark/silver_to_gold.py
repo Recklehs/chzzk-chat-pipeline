@@ -211,11 +211,11 @@ def broadcast_sessions(spark, events, minutes, sessions):
     in_session = events.filter(F.col('session_id').isNotNull())
     # Gap before each event, counting from the session start for the first one.
     previous = F.coalesce(F.lag('event_time').over(Window.partitionBy('session_id').orderBy('event_time')), F.col('started_at'))
-    totals = (in_session.withColumn('gap', seconds('event_time') - seconds(previous))
+    totals = (in_session.withColumn('gap_minutes', (seconds('event_time') - seconds(previous)) / 60)
               .groupBy('session_id')
               .agg(*[F.sum(c).cast('long').alias(c) for c in COUNTS], F.countDistinct('chatter').alias('unique_chatters'),
                    F.min('event_time').alias('first_event_at'), F.max('event_time').alias('last_event_at'),
-                   F.max('gap').alias('max_inner_gap')))
+                   F.max('gap_minutes').alias('max_inner_gap_minutes')))
     ranked = Window.partitionBy('session_id').orderBy(F.desc('chat_count'), 'minute_start')
     peaks = (minutes.filter(F.col('session_id').isNotNull() & (F.col('chat_count') > 0))
              .withColumn('rank', F.row_number().over(ranked)).filter('rank = 1')
@@ -224,7 +224,7 @@ def broadcast_sessions(spark, events, minutes, sessions):
     active = minutes.filter(F.col('session_id').isNotNull()).groupBy('session_id').agg(F.count('*').alias('active_minutes'))
     duration = (seconds('effective_end') - seconds('started_at')) / 60
     max_gap = F.when(F.col('last_event_at').isNull(), duration).otherwise(
-        F.greatest(F.col('max_inner_gap'), seconds('effective_end') - seconds('last_event_at')) / 60)
+        F.greatest(F.col('max_inner_gap_minutes'), (seconds('effective_end') - seconds('last_event_at')) / 60))
     result = (spark.createDataFrame(sessions, SESSION_SCHEMA)
               .join(totals, 'session_id', 'left').join(peaks, 'session_id', 'left').join(active, 'session_id', 'left')
               .fillna(0, subset=[*COUNTS, 'unique_chatters', 'active_minutes'])
@@ -233,7 +233,7 @@ def broadcast_sessions(spark, events, minutes, sessions):
               .withColumn('max_gap_minutes', max_gap)
               .withColumn('data_status', F.when(F.col('last_event_at').isNull(), 'NO_DATA')
                           .when(F.col('max_gap_minutes') >= GAP_MINUTES, 'CHECK_GAP').otherwise('OK')))
-    return result.drop('effective_end', 'max_inner_gap')
+    return result.drop('effective_end', 'max_inner_gap_minutes')
 
 
 def write_manifest(gold_path, manifest):
