@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHZZK 방송 분석</title>
+    <!-- Pinned files with published SRI hashes (cdnjs API, jsDelivr API); jsDelivr minifies .min.css on the fly, so the plain CSS is used. -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css"
+          integrity="sha256-KXO8roAmLctjDPt5P79q8pvZhsdp7lSVP7Pls+MjI8o=" crossorigin="anonymous">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
+            integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw==" crossorigin="anonymous"></script>
+    <style>
+        /* Dark-first stream-analytics look; light values follow the viewer's system setting. */
+        :root {
+            color-scheme: dark;
+            --bg: #0c1016;
+            --panel: #141a23;
+            --panel-2: #1a2230;
+            --line: #263041;
+            --ink: #e9edf4;
+            --muted: #8a94a6;
+            --accent: #2fe0a5;
+            --accent-soft: rgba(47, 224, 165, 0.14);
+            --blue: #6ea8ff;
+            --gold: #f2b84b;
+            --violet: #b38cff;
+            --warn: #f5a524;
+            --danger: #ff6b6b;
+            --gap: rgba(255, 107, 107, 0.12);
+            --grid: rgba(138, 148, 166, 0.14);
+            --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 32px rgba(0, 0, 0, 0.28);
+        }
+        @media (prefers-color-scheme: light) {
+            :root {
+                color-scheme: light;
+                --bg: #f4f6f9; --panel: #ffffff; --panel-2: #f7f9fc; --line: #e2e7ef; --ink: #121823; --muted: #667085;
+                --accent: #0d9f73; --accent-soft: rgba(13, 159, 115, 0.10); --blue: #2f6fd6; --gold: #b7791f; --violet: #7a4fd6;
+                --warn: #b26b00; --danger: #d13d3d; --gap: rgba(209, 61, 61, 0.09); --grid: rgba(102, 112, 133, 0.14);
+                --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.06);
+            }
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--ink);
+               font-family: "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", sans-serif;
+               font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+        button { font: inherit; color: inherit; }
+        .num { font-variant-numeric: tabular-nums; }
+        .shell { max-width: 1320px; margin: 0 auto; padding: 20px 20px 48px; display: grid; gap: 16px; }
+
+        /* top bar */
+        .topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+        .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; letter-spacing: -0.01em; }
+        .brand-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center;
+                      color: var(--bg); font-weight: 900; font-size: 15px; }
+        .live { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; }
+        .live-chip { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel);
+                     border: 1px solid var(--line); font-size: 13px; }
+        .live-chip b { font-size: 14px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+        .dot.pulse { animation: pulse 1.8s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 var(--accent-soft); } 70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+        @media (prefers-reduced-motion: reduce) { .dot.pulse { animation: none; } }
+        .dot.off { background: var(--muted); }
+        .meta-right { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 13px; }
+        .meta-right a { color: var(--accent); text-decoration: none; font-weight: 700; }
+
+        /* overview */
+        .overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+        @media (max-width: 960px) { .overview { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); min-width: 0; }
+        .kpi { padding: 16px 18px; display: grid; gap: 4px; }
+        .kpi .label { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.02em; }
+        .kpi .value { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; }
+        .kpi .sub { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+        .legend-dot { display: inline-flex; align-items: center; gap: 5px; }
+        .legend-dot i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+        /* layout */
+        .main { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: start; }
+        @media (max-width: 960px) { .main { grid-template-columns: 1fr; } }
+        .side { padding: 8px; display: grid; gap: 4px; max-height: calc(100vh - 220px); overflow-y: auto; position: sticky; top: 16px; }
+        @media (max-width: 960px) { .side { position: static; max-height: none; } }
+        .day { font-size: 12px; color: var(--muted); font-weight: 700; padding: 10px 10px 4px; }
+        .row { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 10px minmax(0, 1fr) 72px;
+               gap: 10px; align-items: center; padding: 10px; border-radius: 12px; }
+        .row:hover { background: var(--panel-2); }
+        .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+        .row[aria-current="true"] { background: var(--accent-soft); }
+        .row .name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row .when { font-size: 12px; color: var(--muted); }
+        .row svg { width: 72px; height: 28px; display: block; }
+        .s-OK { background: var(--accent); } .s-CHECK_GAP { background: var(--warn); } .s-NO_DATA { background: var(--danger); } .s-LIVE { background: var(--accent); }
+
+        .detail { display: grid; gap: 16px; min-width: 0; }
+        .head { padding: 20px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+        .eyebrow { font-size: 12px; color: var(--muted); font-weight: 600; }
+        .head h1 { margin: 4px 0 6px; font-size: 26px; letter-spacing: -0.02em; line-height: 1.2; }
+        .head .when { color: var(--muted); font-size: 13px; }
+        .badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 700;
+                 background: var(--panel-2); border: 1px solid var(--line); white-space: nowrap; }
+        .note { margin: 0 20px 20px; padding: 12px 14px; border-radius: 12px; font-size: 13px; border: 1px solid var(--line); }
+        .note.CHECK_GAP { background: rgba(245, 165, 36, 0.08); border-color: rgba(245, 165, 36, 0.35); }
+        .note.NO_DATA { background: rgba(255, 107, 107, 0.08); border-color: rgba(255, 107, 107, 0.35); }
+
+        .chart-card { overflow: hidden; }
+        .tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
+        @media (max-width: 720px) { .tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        .tab { all: unset; box-sizing: border-box; cursor: pointer; padding: 16px 18px; display: grid; gap: 2px; border-right: 1px solid var(--line);
+               position: relative; }
+        .tab:last-child { border-right: 0; }
+        .tab:hover { background: var(--panel-2); }
+        .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+        .tab[aria-pressed="true"] { background: var(--panel-2); }
+        .tab[aria-pressed="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--tab-color); }
+        .tab .label { font-size: 12px; color: var(--muted); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+        .tab .label i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--tab-color); }
+        .tab .value { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+        .tab .value small { font-size: 14px; }
+        .tab .sub { font-size: 12px; color: var(--muted); }
+        .chart-wrap { padding: 16px 16px 8px; }
+        .chart-box { position: relative; height: 320px; }
+        .chart-foot { display: flex; gap: 16px; flex-wrap: wrap; padding: 0 20px 16px; font-size: 12px; color: var(--muted); }
+        .swatch { display: inline-block; width: 12px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; }
+
+        .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+        @media (max-width: 720px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        .stat { padding: 14px 16px; display: grid; gap: 2px; }
+        .stat .label { font-size: 12px; color: var(--muted); font-weight: 600; }
+        .stat .value { font-size: 20px; font-weight: 800; }
+        .stat .sub { font-size: 12px; color: var(--muted); }
+
+        .lower { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; }
+        @media (max-width: 960px) { .lower { grid-template-columns: 1fr; } }
+        .card-title { padding: 16px 18px 0; font-weight: 700; display: flex; justify-content: space-between; gap: 8px; }
+        .card-title span { font-weight: 500; color: var(--muted); font-size: 12px; }
+        .small-chart { position: relative; height: 200px; padding: 8px 12px 12px; }
+        .rank { padding: 10px 12px 14px; display: grid; gap: 4px; }
+        .rank-row { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px;
+                    align-items: center; padding: 8px; border-radius: 10px; }
+        .rank-row:hover { background: var(--panel-2); }
+        .rank-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+        .rank-row[aria-current="true"] { background: var(--accent-soft); }
+        .rank-row .pos { color: var(--muted); font-weight: 700; font-size: 12px; }
+        .rank-row .bar-label { display: grid; gap: 4px; min-width: 0; }
+        .rank-row .bar-label span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+        .bar { height: 6px; border-radius: 3px; background: var(--accent); opacity: 0.85; display: block; }
+        .muted { color: var(--muted); }
+        .empty { padding: 24px; color: var(--muted); }
+        .error { padding: 20px; border-radius: 12px; border: 1px solid rgba(255, 107, 107, 0.35); background: rgba(255, 107, 107, 0.08); }
+    </style>
+</head>
+<body>
+<div class="shell">
+    <header class="topbar">
+        <div class="brand"><span class="brand-mark">G</span>CHZZK 방송 분석</div>
+        <div class="live" id="live" aria-label="지금 채팅 속도"></div>
+        <div class="meta-right"><span id="computed" class="num">계산 시각 확인 중</span><a href="{{ collector_url }}/dashboard">수집 대시보드 →</a></div>
+    </header>
+
+    <section class="overview" id="overview" aria-label="전체 요약"></section>
+
+    <section class="main">
+        <nav class="panel side" id="sessions" aria-label="방송 회차 목록"><div class="empty">불러오는 중</div></nav>
+        <main class="detail" id="detail" aria-live="polite"><div class="panel empty">회차를 고르세요</div></main>
+    </section>
+</div>
+
+<script>
+const REFRESH_MS = {{ refresh_seconds }} * 1000;
+const STATUS = { OK: '정상', CHECK_GAP: '수집 공백 확인 필요', NO_DATA: '수집 데이터 없음', LIVE: '방송 중' };
+const STATUS_NOTE = {
+    CHECK_GAP: '이벤트가 오래 비어 있는 구간이 있습니다. 조용했던 방송일 수도, 수집이 끊겼던 구간일 수도 있습니다. 차트의 붉은 띠를 확인하세요.',
+    NO_DATA: '수집기는 이 시간에 연결돼 있었지만 정제된 이벤트가 하나도 없습니다. 수집 경로(Collector·Kafka·Bronze·Silver)가 멈췄을 가능성이 큽니다.',
+};
+const METRICS = {
+    chat: { label: '채팅', field: 'chat_count', color: '--accent', type: 'line',
+            total: s => s.chat_count, sub: s => `클린봇 가림 ${num(s.blinded_chat_count)}` },
+    chatters: { label: '채팅한 사람', field: 'unique_chatters', color: '--blue', type: 'line', hourly: 'mean',
+                total: s => s.unique_chatters, sub: () => '회차 전체, 같은 사람은 한 번' },
+    donations: { label: '후원', field: 'donation_count', color: '--gold', type: 'bar', unit: '건',
+                 total: s => s.donation_count, sub: s => `CURRENCY ${num(s.donation_amount_currency)} · 익명 ${num(s.anonymous_donation_count)}` },
+    subs: { label: '구독 알림', field: 'subscription_notification_count', color: '--violet', type: 'bar', unit: '건',
+            total: s => s.subscription_notification_count, sub: s => `구독 선물 ${num(s.subscription_gift_count)} · 가입·갱신 수 아님` },
+};
+const kstTime = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false });
+const kstDay = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', weekday: 'short' });
+const kstHour = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Seoul', hour: 'numeric', hour12: false });
+const kstStamp = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+const num = (v, digits = 0) => v == null ? '–' : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: digits });
+const time = iso => iso ? kstTime.format(new Date(iso)) : '지금';
+const day = date => kstDay.format(new Date(`${date}T12:00:00+09:00`));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const statusOf = s => s.ended_at ? s.data_status : 'LIVE';
+const label = s => esc(s.channel_name || s.channel_id);
+
+let sessions = [];
+let selected = null;
+let metric = 'chat';
+let detail = null;
+let computedAt = null;
+const charts = {};
+const shown = {};
+// Polls and clicks can overlap; each loader renders only the response to its most recent request.
+const latest = { sessions: 0, detail: 0 };
+
+async function getJson(url) {
+    const response = await fetch(url);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || response.statusText);
+    return body;
+}
+
+function changed(name, value) {
+    // Redraw only when the data behind a section changed, so an idle page does not flicker.
+    const key = JSON.stringify(value);
+    if (shown[name] === key) return false;
+    shown[name] = key;
+    return true;
+}
+
+function renderComputed() {
+    const el = document.getElementById('computed');
+    if (!computedAt) { el.textContent = 'Gold 계산 기록 없음'; return; }
+    const seconds = Math.max(0, Math.round((Date.now() - new Date(computedAt)) / 1000));
+    const ago = seconds < 60 ? `${seconds}초` : seconds < 3600 ? `${Math.floor(seconds / 60)}분` : `${Math.floor(seconds / 3600)}시간`;
+    el.textContent = `Gold 갱신 ${kstStamp.format(new Date(computedAt))} · ${ago} 전`;
+}
+
+function sparkPath(values, width = 72, height = 28) {
+    const max = Math.max(1, ...values);
+    const step = width / Math.max(1, values.length - 1);
+    const points = values.map((v, i) => [i * step, height - 2 - (v / max) * (height - 4)]);
+    const line = points.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
+    return { line, area: `${line} L${width} ${height} L0 ${height} Z` };
+}
+
+async function loadLive() {
+    const el = document.getElementById('live');
+    let data;
+    try { data = await getJson('/api/live'); } catch (error) { data = { available: false, channels: [] }; }
+    if (!changed('live', data)) return;
+    if (!data.available) { el.innerHTML = '<span class="live-chip"><span class="dot off"></span><span class="muted">수집기 꺼짐</span></span>'; return; }
+    const monitoring = data.channels.filter(c => c.monitoring_status === 'monitoring');
+    el.innerHTML = monitoring.length ? monitoring.map(c => `
+        <span class="live-chip"><span class="dot pulse"></span>${esc(c.display_name)}<b class="num">${num(c.recent_events_per_minute)}</b><span class="muted">건/분</span></span>`).join('')
+        : '<span class="live-chip"><span class="dot off"></span><span class="muted">수집 중인 방송 없음</span></span>';
+}
+
+function renderOverview() {
+    const counts = { OK: 0, CHECK_GAP: 0, NO_DATA: 0, LIVE: 0 };
+    sessions.forEach(s => counts[statusOf(s)]++);
+    const chats = sessions.reduce((a, s) => a + s.chat_count, 0);
+    const donations = sessions.reduce((a, s) => a + s.donation_count, 0);
+    const amount = sessions.reduce((a, s) => a + s.donation_amount_currency, 0);
+    const peak = sessions.reduce((best, s) => (s.peak_minute_chat_count || 0) > (best?.peak_minute_chat_count || 0) ? s : best, null);
+    const withData = sessions.filter(s => s.chat_count > 0).length;
+    const dot = (key, color) => counts[key] ? `<span class="legend-dot"><i style="background:var(${color})"></i>${STATUS[key]} ${counts[key]}</span>` : '';
+    document.getElementById('overview').innerHTML = `
+        <div class="panel kpi"><span class="label">방송 회차</span><span class="value num">${num(sessions.length)}</span>
+            <span class="sub">${dot('LIVE', '--accent')}${dot('OK', '--accent')}${dot('CHECK_GAP', '--warn')}${dot('NO_DATA', '--danger')}</span></div>
+        <div class="panel kpi"><span class="label">총 채팅 · 방송 회차 기준</span><span class="value num">${num(chats)}</span>
+            <span class="sub">데이터 있는 회차 평균 ${num(withData ? chats / withData : 0)}</span></div>
+        <div class="panel kpi"><span class="label">총 후원</span><span class="value num">${num(donations)}<small style="font-size:16px">건</small></span>
+            <span class="sub">CURRENCY ${num(amount)}</span></div>
+        <div class="panel kpi"><span class="label">최고 분당 채팅</span><span class="value num">${num(peak?.peak_minute_chat_count)}</span>
+            <span class="sub">${peak ? `${label(peak)} · ${kstStamp.format(new Date(peak.peak_minute_start))}` : '–'}</span></div>`;
+}
+
+function renderSessions() {
+    const nav = document.getElementById('sessions');
+    if (!sessions.length) { nav.innerHTML = '<div class="empty">아직 방송 회차가 없습니다</div>'; return; }
+    const days = {};
+    sessions.forEach(s => (days[s.broadcast_date_kst] ??= []).push(s));
+    nav.innerHTML = Object.entries(days).map(([date, list]) => `
+        <div class="day">${esc(day(date))} 방송</div>
+        ${list.map(s => {
+            const status = statusOf(s), path = sparkPath(s.sparkline);
+            const color = status === 'NO_DATA' ? '--danger' : status === 'CHECK_GAP' ? '--warn' : '--accent';
+            return `<button class="row" type="button" data-id="${s.session_id}" aria-current="${s.session_id === selected}"
+                aria-label="${label(s)} ${time(s.started_at)}부터 ${time(s.ended_at)}까지, 채팅 ${num(s.chat_count)}, ${STATUS[status]}">
+                <span class="dot s-${status}"></span>
+                <span style="min-width:0"><div class="name">${label(s)}</div>
+                    <div class="when num">${time(s.started_at)}–${time(s.ended_at)} · 채팅 ${num(s.chat_count)}</div></span>
+                <svg viewBox="0 0 72 28" aria-hidden="true"><path d="${path.area}" fill="var(${color})" opacity="0.14"/><path d="${path.line}" fill="none" stroke="var(${color})" stroke-width="1.5"/></svg>
+            </button>`; }).join('')}`).join('');
+    nav.querySelectorAll('.row').forEach(b => b.addEventListener('click', () => select(Number(b.dataset.id))));
+}
+
+function select(id) {
+    selected = id;
+    delete shown.sessions;
+    renderSessions();
+    loadDetail();
+}
+
+async function loadSessions() {
+    const ticket = ++latest.sessions;
+    let data;
+    try { data = await getJson('/api/sessions'); }
+    catch (error) {
+        if (ticket !== latest.sessions) return;
+        delete shown.sessions;
+        document.getElementById('sessions').innerHTML = `<div class="error">${esc(error.message)}</div>`;
+        document.getElementById('overview').innerHTML = '';
+        return;
+    }
+    if (ticket !== latest.sessions) return;
+    computedAt = data.computed_at;
+    renderComputed();
+    sessions = data.sessions;
+    if (selected == null || !sessions.some(s => s.session_id === selected)) selected = sessions[0]?.session_id ?? null;
+    if (changed('sessions', [sessions, selected])) { renderOverview(); renderSessions(); }
+}
+
+const gapBands = {
+    id: 'gapBands',
+    beforeDatasetsDraw(chart, _args, options) {
+        const { ctx, chartArea, scales: { x } } = chart;
+        const half = x.width / (2 * Math.max(1, chart.data.labels.length));  // half a minute's slot
+        ctx.save();
+        ctx.fillStyle = options.color;
+        (options.gaps || []).forEach(g => {
+            const left = Math.max(chartArea.left, x.getPixelForValue(g.from) - half);
+            const right = Math.min(chartArea.right, x.getPixelForValue(g.to) + half);
+            ctx.fillRect(left, chartArea.top, right - left, chartArea.height);
+        });
+        ctx.restore();
+    },
+};
+
+const peakMarker = {
+    id: 'peakMarker',
+    afterDatasetsDraw(chart, _args, options) {
+        if (options.index == null) return;
+        const point = chart.getDatasetMeta(0).data[options.index];
+        if (!point) return;
+        const { ctx, chartArea } = chart;
+        const y0 = Math.min(point.y, chartArea.bottom);
+        ctx.save();
+        ctx.fillStyle = options.color;
+        ctx.strokeStyle = options.background;
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(point.x, y0, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.font = '700 12px "Pretendard Variable", sans-serif';
+        const text = options.label, width = ctx.measureText(text).width + 16;
+        const x = Math.min(Math.max(point.x - width / 2, chartArea.left), chartArea.right - width);
+        const y = Math.max(y0 - 34, chartArea.top);
+        ctx.fillStyle = options.background;
+        ctx.strokeStyle = options.color;
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.roundRect(x, y, width, 22, 6); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = options.color;
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, x + 8, y + 11);
+        ctx.restore();
+    },
+};
+
+function axisOptions() {
+    const muted = css('--muted'), grid = css('--grid');
+    return {
+        x: { ticks: { maxTicksLimit: 10, color: muted, maxRotation: 0 }, grid: { display: false }, border: { color: grid } },
+        y: { beginAtZero: true, ticks: { color: muted, precision: 0 }, grid: { color: grid }, border: { display: false } },
+    };
+}
+
+function tooltipOptions(m) {
+    return { backgroundColor: css('--panel-2'), borderColor: css('--line'), borderWidth: 1, titleColor: css('--ink'),
+             bodyColor: css('--ink'), padding: 10, displayColors: false,
+             callbacks: { label: c => `${m.label} ${num(c.parsed.y)}${m.unit || ''}` } };
+}
+
+function drawMain() {
+    const m = METRICS[metric], color = css(m.color);
+    const index = new Map(detail.minutes.map((p, i) => [p.minute_start, i]));
+    const values = detail.minutes.map(p => p[m.field]);
+    const top = values.length ? Math.max(...values) : 0;
+    const peak = top > 0 ? values.indexOf(top) : null;
+    charts.main?.destroy();
+    charts.main = new Chart(document.getElementById('main-chart'), {
+        type: m.type,
+        data: {
+            labels: detail.minutes.map(p => time(p.minute_start)),
+            datasets: [{
+                label: m.label, data: values, borderColor: color, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0.25,
+                fill: m.type === 'line', barPercentage: 1, categoryPercentage: 1,
+                backgroundColor: m.type === 'bar' ? color : ctx => {
+                    const area = ctx.chart.chartArea;
+                    if (!area) return 'transparent';
+                    const gradient = ctx.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+                    gradient.addColorStop(0, color + '55');
+                    gradient.addColorStop(1, color + '00');
+                    return gradient;
+                },
+            }],
+        },
+        options: {
+            animation: false, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+            scales: axisOptions(),
+            plugins: {
+                legend: { display: false },
+                tooltip: tooltipOptions(m),
+                gapBands: { color: css('--gap'), gaps: detail.gaps.map(g => ({ from: index.get(g.start), to: index.get(g.end) })) },
+                peakMarker: { index: peak, color, background: css('--panel'),
+                              label: peak == null ? '' : `최고 ${num(top)}${m.unit || ''} · ${time(detail.minutes[peak].minute_start)}` },
+            },
+        },
+        plugins: [gapBands, peakMarker],
+    });
+}
+
+function hourlyTitle(m) {
+    // Per-minute unique chatters cannot be summed into hourly unique chatters, so that metric shows the minute average.
+    return m.hourly === 'mean' ? `시간대별 분당 ${m.label} 평균` : `시간대별 ${m.label}`;
+}
+
+function drawHourly() {
+    const m = METRICS[metric], color = css(m.color);
+    const hours = new Map();
+    detail.minutes.forEach(p => {
+        const hour = Number(kstHour.format(new Date(p.minute_start))) % 24;
+        const [total, minutes] = hours.get(hour) || [0, 0];
+        hours.set(hour, [total + p[m.field], minutes + 1]);
+    });
+    const values = [...hours.values()].map(([total, minutes]) => m.hourly === 'mean' ? total / minutes : total);
+    charts.hourly?.destroy();
+    charts.hourly = new Chart(document.getElementById('hourly-chart'), {
+        type: 'bar',
+        data: { labels: [...hours.keys()].map(h => `${h}시`),
+                datasets: [{ data: values, backgroundColor: color, borderRadius: 4, maxBarThickness: 28 }] },
+        options: { animation: false, maintainAspectRatio: false, scales: axisOptions(),
+                   plugins: { legend: { display: false }, tooltip: tooltipOptions(m) } },
+    });
+}
+
+function renderRanking() {
+    const top = [...sessions].filter(s => s.chat_count > 0).sort((a, b) => b.chat_count - a.chat_count).slice(0, 6);
+    const max = Math.max(1, ...top.map(s => s.chat_count));
+    document.getElementById('ranking').innerHTML = top.length ? top.map((s, i) => `
+        <button class="rank-row" type="button" data-id="${s.session_id}" aria-current="${s.session_id === selected}"
+            aria-label="${i + 1}위 ${label(s)}, 채팅 ${num(s.chat_count)}">
+            <span class="pos num">${i + 1}</span>
+            <span class="bar-label"><span>${label(s)} <span class="muted">· ${esc(day(s.broadcast_date_kst))}</span></span>
+                <i class="bar" style="width:${(s.chat_count / max * 100).toFixed(1)}%"></i></span>
+            <span class="num">${num(s.chat_count)}</span>
+        </button>`).join('') : '<div class="empty">채팅이 있는 회차가 없습니다</div>';
+    document.querySelectorAll('.rank-row').forEach(b => b.addEventListener('click', () => select(Number(b.dataset.id))));
+}
+
+function renderDetail() {
+    const s = detail.session, status = statusOf(s), m = METRICS[metric];
+    const perChatter = s.unique_chatters ? s.chat_count / s.unique_chatters : null;
+    const slots = detail.minutes.length;  // the calendar minutes the chart covers, same range as active_minutes
+    const coverage = slots ? Math.min(100, s.active_minutes / slots * 100) : null;
+    document.getElementById('detail').innerHTML = `
+        <section class="panel">
+            <div class="head">
+                <div><div class="eyebrow">${esc(day(s.broadcast_date_kst))} 방송 · 회차 ${s.session_id}</div>
+                    <h1>${label(s)}</h1>
+                    <div class="when num">${kstStamp.format(new Date(s.started_at))} – ${s.ended_at ? kstStamp.format(new Date(s.ended_at)) : '진행 중'} · ${num(s.duration_minutes)}분 수집${s.stop_reason ? ` · ${esc(s.stop_reason)}` : ''}</div></div>
+                <span class="badge"><span class="dot s-${status} ${status === 'LIVE' ? 'pulse' : ''}"></span>${STATUS[status]}</span>
+            </div>
+            ${STATUS_NOTE[status] ? `<p class="note ${status}">${STATUS_NOTE[status]} 가장 긴 공백 <b class="num">${num(s.max_gap_minutes, 1)}분</b>.</p>` : ''}
+        </section>
+        <section class="panel chart-card">
+            <div class="tabs" role="group" aria-label="차트 지표">
+                ${Object.entries(METRICS).map(([key, x]) => `
+                    <button class="tab" type="button" data-metric="${key}" aria-pressed="${key === metric}" style="--tab-color:var(${x.color})"
+                        aria-label="${x.label} ${num(x.total(s))}${x.unit || ''} 차트 보기">
+                        <span class="label"><i></i>${x.label}</span>
+                        <span class="value num">${num(x.total(s))}${x.unit ? `<small>${x.unit}</small>` : ''}</span>
+                        <span class="sub">${x.sub(s)}</span>
+                    </button>`).join('')}
+            </div>
+            <div class="chart-wrap"><div class="chart-box"><canvas id="main-chart" aria-label="분 단위 ${m.label}"></canvas></div></div>
+            <div class="chart-foot">
+                <span><i class="swatch" style="background:var(${m.color})"></i>분 단위 ${m.label}${metric === 'chatters' ? ' (그 분에 채팅한 사람)' : ''}</span>
+                <span><i class="swatch" style="background:var(--gap);border:1px solid var(--danger)"></i>이벤트가 ${num(detail.gap_minutes)}분 넘게 없던 구간 ${num(detail.gaps.length)}개</span>
+                ${metric === 'donations' ? '<span>후원 금액 단위는 확인되지 않아 원화로 표기하지 않습니다</span>' : ''}
+            </div>
+        </section>
+        <section class="stats">
+            <div class="panel stat"><span class="label">분당 채팅</span><span class="value num">${num(s.chats_per_minute, 1)}</span><span class="sub">수집 시간 전체 기준</span></div>
+            <div class="panel stat"><span class="label">가장 붐빈 분</span><span class="value num">${s.peak_minute_start ? time(s.peak_minute_start) : '–'}</span><span class="sub">${s.peak_minute_chat_count ? `${num(s.peak_minute_chat_count)}건` : '채팅 없음'}</span></div>
+            <div class="panel stat"><span class="label">1인당 채팅</span><span class="value num">${num(perChatter, 1)}</span><span class="sub">채팅 ÷ 채팅한 사람</span></div>
+            <div class="panel stat"><span class="label">이벤트 있는 분</span><span class="value num">${coverage == null ? '–' : `${num(coverage)}%`}</span><span class="sub">${num(s.active_minutes)}분 / ${num(slots)}분</span></div>
+        </section>
+        <section class="lower">
+            <div class="panel"><div class="card-title">${hourlyTitle(m)}<span>KST 시 기준</span></div><div class="small-chart"><canvas id="hourly-chart" aria-label="${hourlyTitle(m)}"></canvas></div></div>
+            <div class="panel"><div class="card-title">채팅 많은 회차<span>전체 회차</span></div><div class="rank" id="ranking"></div></div>
+        </section>`;
+    document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { metric = b.dataset.metric; renderDetail(); }));
+    renderRanking();
+    drawMain();
+    drawHourly();
+}
+
+async function loadDetail() {
+    if (selected == null) {
+        latest.detail++;  // a request still in flight for a session that just disappeared must not render
+        detail = null;
+        delete shown.detail;
+        document.getElementById('detail').innerHTML = '<div class="panel empty">회차를 고르세요</div>';
+        return;
+    }
+    // A slower response, for another session or an older read of the same one, must not replace a newer one.
+    const ticket = ++latest.detail, requested = selected;
+    let data;
+    try { data = await getJson(`/api/sessions/${requested}`); }
+    catch (error) {
+        if (ticket !== latest.detail) return;
+        delete shown.detail;
+        document.getElementById('detail').innerHTML = `<div class="panel error">${esc(error.message)}</div>`;
+        return;
+    }
+    if (ticket !== latest.detail) return;
+    if (!changed('detail', [data, requested, sessions.map(s => [s.session_id, s.chat_count])])) return;
+    detail = data;
+    renderDetail();
+}
+
+async function refresh() {
+    await Promise.all([loadSessions(), loadLive()]);
+    await loadDetail();
+}
+
+// Chart colors come from CSS tokens, so redraw when the system theme flips.
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (detail) renderDetail(); });
+refresh();
+setInterval(refresh, REFRESH_MS);
+setInterval(renderComputed, 1000);
+</script>
+</body>
+</html>

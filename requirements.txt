@@ -1,2 +1,3 @@
 -r requirements-collector.txt
 -r requirements-spark.txt
+-r requirements-dashboard.txt

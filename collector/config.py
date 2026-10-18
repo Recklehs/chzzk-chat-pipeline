@@ -56,6 +56,8 @@ def load_settings_from_env() -> AppSettings:
         chzzk_live_poll_max_seconds=float(os.environ.get("CHZZK_LIVE_POLL_MAX_SECONDS", "60")),
         control_db_path=os.environ.get("CONTROL_DB_PATH", "data/control.db"),
         dashboard_refresh_seconds=int(os.environ.get("DASHBOARD_REFRESH_SECONDS", "5")),
+        # Empty hides the link to the separate Gold analytics dashboard.
+        gold_dashboard_url=os.environ.get("GOLD_DASHBOARD_URL", "http://127.0.0.1:8001").strip() or None,
         metrics_enabled=_get_bool_env("METRICS_ENABLED", False),
         redis_enabled=_get_bool_env("REDIS_ENABLED", bool(redis_url)),
         redis_url=redis_url,

@@ -245,6 +245,7 @@ def build_app(
             {
                 "title": "CHZZK Monitoring Dashboard",
                 "refresh_seconds": request.app.state.settings.dashboard_refresh_seconds,
+                "gold_dashboard_url": request.app.state.settings.gold_dashboard_url,
             },
         )
 

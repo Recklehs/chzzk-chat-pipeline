@@ -36,6 +36,9 @@
 │       ├── local.properties
 │       ├── dev.properties
 │       └── prod.properties
+├── dashboard/
+│   ├── app.py
+│   └── templates/
 ├── chzzk_collector_server.py
 ├── chzzk_control.py
 ├── kafka_raw_publisher.py
@@ -309,6 +312,19 @@ Gold가 `Sessions … overlap` 또는 `… ends before it starts` 오류로 멈�
 ```
 
 배치 간격은 Bronze `spark.streaming.trigger.interval`(로컬 5초), Silver `app.silver.trigger.interval`(10초), Gold `app.gold.trigger.interval`(10초)입니다. 층별 키가 없으면 Bronze 값을 따릅니다. 간격을 정한 근거와 검토한 다른 방식은 [Gold 실시간 갱신 방식 결정](docs/decisions/2026-10-18-gold-live-refresh.md)에, 지표 정의와 방송 날짜·수집 공백 규칙은 [Gold 계약](docs/gold-data-contract.md)에 있습니다.
+
+7. 다른 터미널에서 Gold 대시보드를 시작합니다. Collector와 별도 프로세스라 Kafka나 Collector가 꺼져 있어도 Gold 테이블만 있으면 열립니다.
+
+```bash
+.venv/bin/uvicorn dashboard.app:app --port 8001
+```
+
+- 대시보드: http://127.0.0.1:8001 (Collector 대시보드 상단의 "방송 분석 보기"로도 이동)
+- 방송 회차 목록(방송 날짜별, 수집 상태 표시)과 회차 상세(요약 수치, 분 단위 채팅 수·채팅한 사람·후원 차트, 긴 공백 구간 표시)를 10초마다 다시 읽습니다.
+- 상단 "지금 채팅 속도"는 Collector의 최근 60초 통계(`/channels`)입니다. Collector가 꺼져 있으면 그 칸만 꺼짐으로 표시합니다.
+- 환경 변수: `GOLD_PATH`(기본 `data/output/local/frames/gold`), `COLLECTOR_URL`(서버가 Collector `/channels`를 부르는 주소, 기본 `http://127.0.0.1:8000`), `COLLECTOR_PUBLIC_URL`(브라우저의 "수집 대시보드" 링크 주소, 기본은 `COLLECTOR_URL`과 같음), `GOLD_DASHBOARD_REFRESH_SECONDS`(기본 10). Collector 쪽 링크 주소는 `GOLD_DASHBOARD_URL`(기본 `http://127.0.0.1:8001`, 빈 값이면 숨김)입니다.
+- 대시보드에는 인증이 없고 채널별 채팅·후원 통계를 그대로 보여줍니다. 위 명령은 `127.0.0.1`에만 열리므로, 다른 컴퓨터에서 보려고 `--host 0.0.0.0`으로 열 때는 앞단에 인증이 있는 프록시를 두세요.
+- 대시보드 의존성(`deltalake` 등)은 `requirements-dashboard.txt`에 있습니다. `requirements.txt`가 함께 설치하며, Collector Docker 이미지에는 들어가지 않습니다.
 
 ### 선택 사항: Pub/Sub emulator + collector
 

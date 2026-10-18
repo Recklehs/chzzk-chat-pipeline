@@ -27,6 +27,7 @@ flowchart TB
         SC[("Silver checkpoint<br/>data/output/local/frames/silver_checkpoint")]
         GS["Gold Spark · 별도 프로세스<br/>바뀐 방송 회차만 다시 계산"]
         GL[("Gold Delta · 2개 테이블<br/>data/output/local/frames/gold")]
+        GD["Gold 대시보드 · FastAPI 별도 프로세스<br/>HTTP :8001"]
     end
 
     USER -->|"채널 등록 · 제어 · 상태 조회"| COL
@@ -43,6 +44,9 @@ flowchart TB
     SL -->|"스트리밍 읽기"| GS
     SQL -->|"방송 회차"| GS
     GS --> GL
+    GL -->|"deltalake 읽기"| GD
+    COL -. "최근 60초 통계" .-> GD
+    USER -->|"방송 분석 조회"| GD
     USER -.-> UI
     UI -. "Docker 내부 kafka:29092" .-> K
     REDIS[("Redis · 선택 구성<br/>대시보드 상태 캐시 / TTL 10초")]
@@ -52,7 +56,7 @@ flowchart TB
 - Collector 내부 모듈은 하나의 Python 프로세스에서 동작한다. 채널마다 별도 서버를 띄우지 않고 비동기 작업을 만든다.
 - Kafka와 Kafka UI는 각각 Docker 컨테이너다. 기본 Compose에 Collector·Spark·Redis 컨테이너는 없다.
 - Spark는 Collector와 별도로 시작하고 종료한다. 기본 실행 경로에 GCS와 Google 인증은 필요하지 않다.
-- 대시보드는 Collector의 메모리 통계를 보여준다. 현재 Spark 결과를 읽는 분석 API/화면은 연결되어 있지 않다.
+- Collector 대시보드는 Collector의 메모리 통계를 보여준다. Spark 결과(Gold)는 별도 Gold 대시보드(:8001)가 보여준다.
 
 ## 2. Collector 모듈 연결
 
@@ -162,6 +166,6 @@ Silver의 실행 진입점은 [spark/bronze_to_silver.py](../spark/bronze_to_sil
 
 Gold의 실행 진입점은 [spark/silver_to_gold.py](../spark/silver_to_gold.py)다. Silver 분석용 네 테이블을 하나의 스트림으로 읽고, 트리거마다 새 이벤트가 속한 회차와 진행 중이거나 Collector 기록이 바뀐 회차만 다시 집계해 `channel_minute_activity`(채널 × 1분)와 `broadcast_sessions`(방송 회차 1건)의 해당 행을 `replaceWhere`로 교체한다. 새 이벤트가 없어도 드라이버 타이머가 같은 간격으로 회차 종료와 수집 공백을 반영한다. `--full`은 Silver 버전을 고정해 전체를 다시 계산한다. 방송 날짜는 회차 시작 시각의 KST 날짜다. 상세 규칙은 [Gold 계약](gold-data-contract.md), 방식을 고른 근거는 [결정 기록](decisions/2026-10-18-gold-live-refresh.md)에 있다.
 
-현재 기본 파이프라인은 프레임 단위 Bronze, 이벤트 단위 Silver, 방송 지표 Gold까지 지원한다. Gold를 보여주는 대시보드, 감정·키워드 분석은 아직 연결되어 있지 않다.
+현재 기본 파이프라인은 프레임 단위 Bronze, 이벤트 단위 Silver, 방송 지표 Gold까지 지원한다. Gold는 [dashboard/app.py](../dashboard/app.py)의 별도 FastAPI 대시보드가 `deltalake`로 직접 읽는다. Collector 대시보드에는 링크만 있고, 대시보드의 "지금 채팅 속도"는 Collector `/channels`의 최근 60초 통계다. 감정·키워드 분석은 아직 연결되어 있지 않다.
 
 실행 순서는 [README의 빠른 시작](../README.md#빠른-시작)을 참고한다.

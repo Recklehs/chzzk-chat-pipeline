@@ -44,6 +44,7 @@ class AppSettings:
     chzzk_live_poll_max_seconds: float = 60
     control_db_path: str = "data/control.db"
     dashboard_refresh_seconds: int = 5
+    gold_dashboard_url: str | None = "http://127.0.0.1:8001"
     metrics_enabled: bool = False
     redis_enabled: bool = False
     redis_url: str | None = None
