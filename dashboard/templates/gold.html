@@ -201,6 +201,8 @@ let detail = null;
 let computedAt = null;
 const charts = {};
 const shown = {};
+// Polls and clicks can overlap; each loader renders only the response to its most recent request.
+const latest = { sessions: 0, detail: 0 };
 
 async function getJson(url) {
     const response = await fetch(url);
@@ -293,14 +295,17 @@ function select(id) {
 }
 
 async function loadSessions() {
+    const ticket = ++latest.sessions;
     let data;
     try { data = await getJson('/api/sessions'); }
     catch (error) {
+        if (ticket !== latest.sessions) return;
         delete shown.sessions;
         document.getElementById('sessions').innerHTML = `<div class="error">${esc(error.message)}</div>`;
         document.getElementById('overview').innerHTML = '';
         return;
     }
+    if (ticket !== latest.sessions) return;
     computedAt = data.computed_at;
     renderComputed();
     sessions = data.sessions;
@@ -493,17 +498,17 @@ function renderDetail() {
 
 async function loadDetail() {
     if (selected == null) { document.getElementById('detail').innerHTML = '<div class="panel empty">회차를 고르세요</div>'; return; }
-    // Responses can arrive out of order when the selection changes quickly; only the current selection may render.
-    const requested = selected;
+    // A slower response, for another session or an older read of the same one, must not replace a newer one.
+    const ticket = ++latest.detail, requested = selected;
     let data;
     try { data = await getJson(`/api/sessions/${requested}`); }
     catch (error) {
-        if (requested !== selected) return;
+        if (ticket !== latest.detail) return;
         delete shown.detail;
         document.getElementById('detail').innerHTML = `<div class="panel error">${esc(error.message)}</div>`;
         return;
     }
-    if (requested !== selected) return;
+    if (ticket !== latest.detail) return;
     if (!changed('detail', [data, requested, sessions.map(s => [s.session_id, s.chat_count])])) return;
     detail = data;
     renderDetail();
