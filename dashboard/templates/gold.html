@@ -497,7 +497,13 @@ function renderDetail() {
 }
 
 async function loadDetail() {
-    if (selected == null) { document.getElementById('detail').innerHTML = '<div class="panel empty">회차를 고르세요</div>'; return; }
+    if (selected == null) {
+        latest.detail++;  // a request still in flight for a session that just disappeared must not render
+        detail = null;
+        delete shown.detail;
+        document.getElementById('detail').innerHTML = '<div class="panel empty">회차를 고르세요</div>';
+        return;
+    }
     // A slower response, for another session or an older read of the same one, must not replace a newer one.
     const ticket = ++latest.detail, requested = selected;
     let data;

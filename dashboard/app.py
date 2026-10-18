@@ -75,6 +75,7 @@ def sparklines(minutes, sessions, computed_at, buckets=24):
     position = pc.index_in(table['session_id'], value_set=ids)
     known = pc.is_valid(position)
     table, position = table.filter(known), position.filter(known)
+    # Delta stores timestamps in microseconds, the same unit as `starts`.
     offset = pc.subtract(pc.cast(table['minute_start'], pa.int64()), pc.take(starts, position))
     bucket = pc.cast(pc.floor(pc.multiply(pc.divide(pc.cast(offset, pa.float64()), pc.take(spans, position)), buckets)), pa.int64())
     bucket = pc.min_element_wise(pc.max_element_wise(bucket, 0), buckets - 1)
@@ -142,16 +143,16 @@ def create_app(gold_path=None, collector_url=None, refresh_seconds=None, live=fe
             manifest = read_manifest(gold_path)
             tables = open_table(gold_path, 'broadcast_sessions'), open_table(gold_path, 'channel_minute_activity')
             end = computed_at(manifest)
-            # Gold rewrites rows every trigger; between writes every poll gets the cached body. Without a manifest the
-            # end is "now", which keeps ongoing sessions moving instead of freezing the cache.
-            key = (tables[0].version(), tables[1].version(), end.isoformat())
+            # Only table versions key the cache: the Gold timer rewrites computed_at every trigger even when no row
+            # changed. A live session's rows are rewritten each trigger, so its trend still follows. Without a manifest
+            # the end is "now", which keeps an ongoing session from freezing.
+            key = (tables[0].version(), tables[1].version(), None if manifest.get('computed_at') else end.isoformat())
             if listing.get('key') != key:
                 rows = sorted(tables[0].to_pyarrow_dataset().to_table().to_pylist(), key=lambda r: r['started_at'], reverse=True)
                 trends = sparklines(tables[1], rows, end)
-                body = {'computed_at': manifest.get('computed_at'), 'mode': manifest.get('mode'), 'gap_minutes': manifest.get('gap_minutes'),
-                        'sessions': [{**jsonable(r), 'sparkline': trends[r['session_id']]} for r in rows]}
-                listing.update(key=key, body=body)
-            return listing['body']
+                listing.update(key=key, sessions=[{**jsonable(r), 'sparkline': trends[r['session_id']]} for r in rows])
+            return {'computed_at': manifest.get('computed_at'), 'mode': manifest.get('mode'),
+                    'gap_minutes': manifest.get('gap_minutes'), 'sessions': listing['sessions']}
 
     @app.get('/api/sessions/{session_id}')
     def session_detail(session_id: int):

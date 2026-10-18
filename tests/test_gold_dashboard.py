@@ -123,3 +123,19 @@ def test_concurrent_first_polls_share_one_complete_listing(tmp_path):
         responses = list(pool.map(lambda _: app.get('/api/sessions'), range(16)))
     assert {r.status_code for r in responses} == {200}
     assert len({json.dumps(r.json(), sort_keys=True) for r in responses}) == 1
+
+
+def test_new_computed_at_alone_reuses_cached_listing(tmp_path, monkeypatch):
+    import dashboard.app as dashboard
+    calls = []
+    real = dashboard.sparklines
+    monkeypatch.setattr(dashboard, 'sparklines', lambda *a, **k: calls.append(1) or real(*a, **k))
+    path = gold(tmp_path)
+    app = client(path)
+    app.get('/api/sessions')
+    # The Gold timer rewrites the manifest every trigger even when no row changed.
+    (tmp_path / '_gold_manifest.json').write_text(json.dumps({'mode': 'stream', 'gap_minutes': 10,
+                                                              'computed_at': at(11, 5).isoformat()}))
+    body = app.get('/api/sessions').json()
+    assert len(calls) == 1 and body['computed_at'] == '2026-09-22T11:05:00+00:00'
+
