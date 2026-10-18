@@ -40,7 +40,16 @@ def test_overlapping_sessions_of_one_channel_are_rejected(tmp_path):
         (1, 'a', 'a', '2026-09-22T17:00:00+09:00', '2026-09-22T19:00:00+09:00', None),
         (2, 'a', 'a', '2026-09-22T18:00:00+09:00', '2026-09-22T20:00:00+09:00', None),
     ])
-    with pytest.raises(ValueError, match='overlap'):
+    with pytest.raises(ValueError, match='overlap') as error:
+        read_sessions(path, NOW)
+    assert 'channel a' in str(error.value) and '--full' in str(error.value)
+
+
+def test_session_ending_before_it_starts_names_the_row_to_fix(tmp_path):
+    path = control_db(tmp_path / 'control.db', [
+        (7, 'a', 'a', '2026-09-22T19:00:00+09:00', '2026-09-22T18:59:00+09:00', 'BROADCAST_ENDED'),
+    ])
+    with pytest.raises(ValueError, match='Session 7 of channel a ends before it starts'):
         read_sessions(path, NOW)
 
 

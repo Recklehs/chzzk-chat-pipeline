@@ -121,7 +121,8 @@ flowchart LR
 
 - 트리거 간격은 Bronze `spark.streaming.trigger.interval`, Silver `app.silver.trigger.interval`, Gold `app.gold.trigger.interval`이다. 층별 키가 없으면 Bronze 값을 따른다. 로컬 기본값은 5초·10초·10초다. 간격은 처리 시간보다 길게 둔다(측정: Silver 배치 약 3.5초, 진행 중인 큰 회차 하나 약 2초).
 - SQLite는 Python 표준 `sqlite3`로 읽기 전용으로 연다. 회차 수가 작아 Spark JDBC 드라이버를 추가하지 않는다.
-- 한 채널의 회차 구간이 겹치면 이벤트가 두 번 집계되므로 실패한다. 연속한 회차(앞 회차 종료 = 다음 회차 시작)는 허용한다.
+- 한 채널의 회차 구간이 겹치거나 종료가 시작보다 앞서면 이벤트가 두 번 집계되거나 빠지므로 Gold를 멈춘다. 연속한 회차(앞 회차 종료 = 다음 회차 시작)는 허용한다. Collector는 두 시각을 같은 시계로 기록하고 채널의 열린 회차를 재사용하므로, 이 오류는 SQLite를 손으로 고쳤거나 시계가 뒤로 점프했을 때만 생긴다. 한 채널 때문에 모든 채널의 갱신이 멈추지만, 조용히 틀린 숫자를 보여주는 것보다 낫다고 판단했다. 복구 절차는 README에 있다.
+- Collector는 회차 기록을 지우지 않는다. 손으로 지운 회차의 Gold 행은 스트림이 정리하지 않으므로 `--full`로 정리한다.
 - 출력 경로: `data/output/local/frames/gold/<table>`(`app.gold.path`), 체크포인트 `data/output/local/frames/gold_checkpoint`(`app.gold.checkpoint.path`), SQLite `data/control.db`(`app.control.db.path`). `gold/_gold_manifest.json`에 마지막 계산 시각과 모드, 스트림은 다시 계산한 회차를, `--full`은 읽은 Silver 버전을 기록한다.
 - 시간대 계산은 Spark 세션 `UTC`에서 한다. SQLite 시각은 `+09:00` 오프셋을 포함한 ISO 문자열이므로 instant로 변환한 뒤 비교하고, 방송 날짜만 Asia/Seoul로 계산한다. PySpark `collect()`는 시각을 로컬 시간대의 naive datetime으로 돌려주므로 드라이버 쪽 비교는 epoch 마이크로초로 한다.
 

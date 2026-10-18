@@ -94,11 +94,15 @@ def read_sessions(db_path, now):
         started_at = datetime.fromisoformat(started).astimezone(timezone.utc)
         ended_at = datetime.fromisoformat(ended).astimezone(timezone.utc) if ended else None
         effective_end = ended_at or now
+        # Collector writes both times from one clock and reuses a channel's open session, so these only fire on a
+        # hand-edited row or a clock jump. Stop rather than count events twice; README lists the repair steps.
         if effective_end < started_at:
-            raise ValueError(f'Session {session_id} ends before it starts')
+            raise ValueError(f'Session {session_id} of channel {channel_id} ends before it starts '
+                             f'({started} -> {ended}); fix monitoring_sessions in {db_path}, then run --full')
         previous = sessions[-1] if sessions else None
         if previous and previous['channel_id'] == channel_id and previous['effective_end'] > started_at:
-            raise ValueError(f'Sessions {previous["session_id"]} and {session_id} overlap; an event would count twice')
+            raise ValueError(f'Sessions {previous["session_id"]} and {session_id} of channel {channel_id} overlap, '
+                             f'so an event would count twice; fix monitoring_sessions in {db_path}, then run --full')
         sessions.append({'session_id': session_id, 'channel_id': channel_id, 'channel_name': name,
                          'started_at': started_at, 'ended_at': ended_at, 'effective_end': effective_end,
                          'stop_reason': reason, 'broadcast_date_kst': started_at.astimezone(KST).date()})
@@ -249,14 +253,14 @@ def run(spark, silver_path, gold_path, control_db, now=None):
     versions = {t: DeltaTable.forPath(spark, f'{silver_path}/{t}').history(1).first()['version'] for t in SOURCES}
     sessions = read_sessions(control_db, now)
     events = tagged_events(spark, silver_path, sessions, versions).cache()
+    minutes = minute_activity(events).cache()
     try:
-        minutes = minute_activity(events).cache()
         outputs = {'channel_minute_activity': minutes,
                    'broadcast_sessions': broadcast_sessions(spark, events, minutes, sessions)}
         for table, df in outputs.items():
             df.write.format('delta').mode('overwrite').option('overwriteSchema', 'true').save(f'{gold_path}/{table}')
-        minutes.unpersist()
     finally:
+        minutes.unpersist()
         events.unpersist()
     manifest = {'mode': 'full', 'computed_at': now.isoformat(), 'silver_path': silver_path, 'silver_versions': versions,
                 'control_db_path': control_db, 'gap_minutes': GAP_MINUTES}
@@ -298,8 +302,8 @@ def refresh(spark, silver_path, gold_path, control_db, events=None, now=None):
         windows += [(c, EPOCH + timedelta(microseconds=lo), EPOCH + timedelta(microseconds=hi) + timedelta(minutes=1))
                     for c, (lo, hi) in loose.items()]
         scoped = tagged_events(spark, silver_path, sessions, windows=windows).cache()
+        minutes = minute_activity(scoped).cache()
         try:
-            minutes = minute_activity(scoped).cache()
             # A loose range can also hold minutes of untouched sessions; keep only the keys being rewritten.
             keep = F.col('session_id').isin(sorted(affected)) | (F.col('session_id').isNull() & F.expr(minutes_where))
             (minutes.filter(keep).write.format('delta').mode('overwrite').option('replaceWhere', minutes_where)
@@ -307,8 +311,8 @@ def refresh(spark, silver_path, gold_path, control_db, events=None, now=None):
             if sessions_where:
                 (broadcast_sessions(spark, scoped, minutes, touched).write.format('delta').mode('overwrite')
                  .option('replaceWhere', sessions_where).save(f'{gold_path}/broadcast_sessions'))
-            minutes.unpersist()
         finally:
+            minutes.unpersist()
             scoped.unpersist()
     manifest = {'mode': 'stream', 'computed_at': now.isoformat(), 'silver_path': silver_path,
                 'refreshed_sessions': sorted(affected), 'refreshed_loose_channels': sorted(loose),

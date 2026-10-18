@@ -301,6 +301,8 @@ source .venv/bin/activate
 grep -h '\[spark-silver\]' data/logs/silver-*.log | grep -v '"removed":0'
 ```
 
+Gold가 `Sessions … overlap` 또는 `… ends before it starts` 오류로 멈추면, 메시지에 적힌 채널의 `monitoring_sessions` 행을 고칩니다. Collector가 같은 시계로 기록하므로 SQLite를 손으로 고쳤거나 시계가 뒤로 점프했을 때만 생깁니다. 겹친 회차의 `started_at`/`ended_at`을 실제 수집 구간에 맞추거나 잘못 만든 행을 지운 뒤, `--full`을 한 번 실행하고 Gold 스트림을 다시 시작합니다. 회차 행을 손으로 지운 경우에도 `--full`이 Gold의 해당 행을 정리합니다.
+
 ```bash
 .venv/bin/spark-submit --properties-file spark/conf/local.properties \
   spark/silver_to_gold.py --properties-file spark/conf/local.properties --full
