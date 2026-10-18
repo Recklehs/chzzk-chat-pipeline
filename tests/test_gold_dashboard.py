@@ -87,6 +87,8 @@ def test_live_rate_comes_from_collector_and_degrades_when_it_is_down(tmp_path):
 
 def test_collector_payload_shape_is_checked():
     assert live_channels({'channels': [{'channel_id': 'a'}]})[0]['display_name'] == 'a'
+    images = [{'channel_id': 'a', 'channel_image_url': url} for url in ('https://x/p.png', 'javascript:alert(1)', 'http://x/p.png', 3)]
+    assert [c['channel_image_url'] for c in live_channels({'channels': images})] == ['https://x/p.png', None, None, None]
     for payload in (['channels'], {'channels': {'a': 1}}, {'channels': ['a']}, {'channels': [{'name': 'no id'}]}):
         with pytest.raises(ValueError, match='Collector'):
             live_channels(payload)

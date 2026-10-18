@@ -3,39 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CHZZK 방송 분석</title>
+    <title>CHZZK 채팅 리포트</title>
     <!-- Pinned files with published SRI hashes (cdnjs API, jsDelivr API); jsDelivr minifies .min.css on the fly, so the plain CSS is used. -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css"
           integrity="sha256-KXO8roAmLctjDPt5P79q8pvZhsdp7lSVP7Pls+MjI8o=" crossorigin="anonymous">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
             integrity="sha512-CQBWl4fJHWbryGE+Pc7UAxWMUMNMWzWxF4SQo9CgkJIN1kx6djDQZjh3Y8SZ1d+6I+1zze6Z7kHXO7q3UyZAWw==" crossorigin="anonymous"></script>
     <style>
-        /* Dark-first stream-analytics look; light values follow the viewer's system setting. */
+        /* Dark-first viewer service; light values follow the viewer's system setting. */
         :root {
             color-scheme: dark;
-            --bg: #0c1016;
+            --bg: #0b0f15;
             --panel: #141a23;
             --panel-2: #1a2230;
             --line: #263041;
-            --ink: #e9edf4;
-            --muted: #8a94a6;
+            --ink: #eef1f6;
+            --muted: #8d97a8;
             --accent: #2fe0a5;
             --accent-soft: rgba(47, 224, 165, 0.14);
+            --live: #ff4d5e;
+            --live-soft: rgba(255, 77, 94, 0.14);
             --blue: #6ea8ff;
             --gold: #f2b84b;
             --violet: #b38cff;
             --warn: #f5a524;
             --danger: #ff6b6b;
             --gap: rgba(255, 107, 107, 0.12);
-            --grid: rgba(138, 148, 166, 0.14);
+            --grid: rgba(141, 151, 168, 0.14);
             --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 32px rgba(0, 0, 0, 0.28);
         }
         @media (prefers-color-scheme: light) {
             :root {
                 color-scheme: light;
-                --bg: #f4f6f9; --panel: #ffffff; --panel-2: #f7f9fc; --line: #e2e7ef; --ink: #121823; --muted: #667085;
-                --accent: #0d9f73; --accent-soft: rgba(13, 159, 115, 0.10); --blue: #2f6fd6; --gold: #b7791f; --violet: #7a4fd6;
-                --warn: #b26b00; --danger: #d13d3d; --gap: rgba(209, 61, 61, 0.09); --grid: rgba(102, 112, 133, 0.14);
+                --bg: #f4f6f9; --panel: #ffffff; --panel-2: #f6f8fb; --line: #e3e8ef; --ink: #111722; --muted: #667085;
+                --accent: #0d9f73; --accent-soft: rgba(13, 159, 115, 0.10); --live: #e5263a; --live-soft: rgba(229, 38, 58, 0.09);
+                --blue: #2f6fd6; --gold: #b7791f; --violet: #7a4fd6; --warn: #b26b00; --danger: #d13d3d;
+                --gap: rgba(209, 61, 61, 0.09); --grid: rgba(102, 112, 133, 0.14);
                 --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 8px 24px rgba(16, 24, 40, 0.06);
             }
         }
@@ -43,74 +46,118 @@
         body { margin: 0; background: var(--bg); color: var(--ink);
                font-family: "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", sans-serif;
                font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+        a { color: inherit; text-decoration: none; }
         button { font: inherit; color: inherit; }
         .num { font-variant-numeric: tabular-nums; }
-        .shell { max-width: 1320px; margin: 0 auto; padding: 20px 20px 48px; display: grid; gap: 16px; }
+        .muted { color: var(--muted); }
+        .shell { max-width: 1200px; margin: 0 auto; padding: 0 20px 56px; display: grid; gap: 28px; }
+        #view { display: grid; gap: 28px; min-width: 0; }
 
         /* top bar */
-        .topbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-        .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; letter-spacing: -0.01em; }
+        .topbar { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent);
+                  backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+        .topbar-inner { max-width: 1200px; margin: 0 auto; padding: 14px 20px; display: flex; align-items: center; gap: 16px; }
+        .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 17px; letter-spacing: -0.01em; }
         .brand-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); display: grid; place-items: center;
-                      color: var(--bg); font-weight: 900; font-size: 15px; }
-        .live { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; }
-        .live-chip { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--panel);
-                     border: 1px solid var(--line); font-size: 13px; }
-        .live-chip b { font-size: 14px; }
-        .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
-        .dot.pulse { animation: pulse 1.8s infinite; }
-        @keyframes pulse { 0% { box-shadow: 0 0 0 0 var(--accent-soft); } 70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
-        @media (prefers-reduced-motion: reduce) { .dot.pulse { animation: none; } }
-        .dot.off { background: var(--muted); }
-        .meta-right { display: flex; align-items: center; gap: 14px; color: var(--muted); font-size: 13px; }
-        .meta-right a { color: var(--accent); text-decoration: none; font-weight: 700; }
+                      color: var(--bg); font-weight: 900; font-size: 14px; }
+        .updated { margin-left: auto; color: var(--muted); font-size: 13px; }
 
-        /* overview */
-        .overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-        @media (max-width: 960px) { .overview { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        /* shared pieces */
         .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); min-width: 0; }
+        .section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
+        .section-title h2 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
+        .section-title span { color: var(--muted); font-size: 13px; }
+        .avatar { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 17px;
+                  color: #fff; flex: none; position: relative; overflow: hidden; }
+        .avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+        .avatar.lg { width: 72px; height: 72px; font-size: 28px; }
+        .avatar.live { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--live); }
+        .live-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 6px; font-size: 11px; font-weight: 800;
+                      letter-spacing: 0.06em; background: var(--live); color: #fff; }
+        .live-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #fff; animation: blink 1.4s infinite; }
+        @keyframes blink { 50% { opacity: 0.25; } }
+        @media (prefers-reduced-motion: reduce) { .live-badge::before { animation: none; } }
+        .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+                background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+        .chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+        .chip.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+        .crumbs { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; padding-top: 20px; flex-wrap: wrap; }
+        .crumbs a:hover { color: var(--ink); }
+        .crumbs b { color: var(--ink); font-weight: 600; }
+        .empty { padding: 24px; color: var(--muted); }
+        .error { padding: 20px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+                 background: color-mix(in srgb, var(--danger) 8%, transparent); }
+        .clickable { cursor: pointer; transition: border-color .15s, transform .15s; }
+        .clickable:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+        .clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        @media (prefers-reduced-motion: no-preference) { .clickable:hover { transform: translateY(-1px); } }
+
+        /* home */
+        .hero { padding-top: 36px; display: grid; gap: 8px; }
+        .hero h1 { margin: 0; font-size: clamp(28px, 4.5vw, 40px); letter-spacing: -0.03em; line-height: 1.15; }
+        .hero p { margin: 0; color: var(--muted); font-size: 15px; max-width: 46em; }
+        .live-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+        .live-card { padding: 18px; display: grid; gap: 14px; border-color: color-mix(in srgb, var(--live) 35%, var(--line));
+                     background: linear-gradient(160deg, var(--live-soft), transparent 55%), var(--panel); }
+        .live-card .who { display: flex; align-items: center; gap: 12px; }
+        .live-card .who b { font-size: 16px; display: block; }
+        .live-card .rate { display: flex; align-items: baseline; gap: 6px; }
+        .live-card .rate strong { font-size: 32px; font-weight: 800; letter-spacing: -0.02em; }
+        .live-card .facts { display: flex; gap: 14px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+        .channel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+        .channel-card { padding: 18px; display: grid; gap: 14px; }
+        .channel-card .who { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .channel-card .who > div { min-width: 0; }
+        .channel-card .who b { font-size: 15px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .channel-card .who span { font-size: 12px; color: var(--muted); }
+        .mini-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+        .mini-stats div { display: grid; gap: 1px; }
+        .mini-stats span { font-size: 11px; color: var(--muted); }
+        .mini-stats b { font-size: 15px; }
+        .channel-card svg { width: 100%; height: 40px; display: block; }
+        .recent { display: grid; gap: 8px; }
+        .bcast-row { padding: 12px 16px; display: grid; grid-template-columns: 44px minmax(0, 1.6fr) repeat(3, minmax(0, 1fr)) 110px;
+                     gap: 14px; align-items: center; }
+        .bcast-row.no-avatar { grid-template-columns: minmax(0, 1.6fr) repeat(3, minmax(0, 1fr)) 110px; }
+        .bcast-row .title b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .bcast-row .title span { font-size: 12px; color: var(--muted); }
+        .bcast-row .stat span { display: block; font-size: 11px; color: var(--muted); }
+        .bcast-row .stat b { font-size: 15px; }
+        .bcast-row svg { width: 110px; height: 32px; display: block; }
+        @media (max-width: 760px) {
+            .bcast-row, .bcast-row.no-avatar { grid-template-columns: 44px minmax(0, 1fr) auto; }
+            .bcast-row.no-avatar { grid-template-columns: minmax(0, 1fr) auto; }
+            .bcast-row .stat.extra, .bcast-row svg { display: none; }
+        }
+
+        /* channel */
+        .channel-head { padding: 24px; display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+        .channel-head h1 { margin: 0; font-size: 28px; letter-spacing: -0.02em; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .channel-head p { margin: 4px 0 0; color: var(--muted); }
+        .channel-head .now { margin-left: auto; text-align: right; }
+        .channel-head .now strong { display: block; font-size: 28px; font-weight: 800; }
+        .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+        @media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         .kpi { padding: 16px 18px; display: grid; gap: 4px; }
-        .kpi .label { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.02em; }
-        .kpi .value { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; }
-        .kpi .sub { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
-        .legend-dot { display: inline-flex; align-items: center; gap: 5px; }
-        .legend-dot i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+        .kpi .label { font-size: 12px; color: var(--muted); font-weight: 600; }
+        .kpi .value { font-size: 26px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; }
+        .kpi .value small { font-size: 14px; font-weight: 700; }
+        .kpi .sub { font-size: 12px; color: var(--muted); }
+        .chart-panel { padding: 18px 18px 12px; }
+        .chart-box { position: relative; height: 300px; }
 
-        /* layout */
-        .main { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: start; }
-        @media (max-width: 960px) { .main { grid-template-columns: 1fr; } }
-        .side { padding: 8px; display: grid; gap: 4px; max-height: calc(100vh - 220px); overflow-y: auto; position: sticky; top: 16px; }
-        @media (max-width: 960px) { .side { position: static; max-height: none; } }
-        .day { font-size: 12px; color: var(--muted); font-weight: 700; padding: 10px 10px 4px; }
-        .row { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 10px minmax(0, 1fr) 72px;
-               gap: 10px; align-items: center; padding: 10px; border-radius: 12px; }
-        .row:hover { background: var(--panel-2); }
-        .row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-        .row[aria-current="true"] { background: var(--accent-soft); }
-        .row .name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .row .when { font-size: 12px; color: var(--muted); }
-        .row svg { width: 72px; height: 28px; display: block; }
-        .s-OK { background: var(--accent); } .s-CHECK_GAP { background: var(--warn); } .s-NO_DATA { background: var(--danger); } .s-LIVE { background: var(--accent); }
-
-        .detail { display: grid; gap: 16px; min-width: 0; }
-        .head { padding: 20px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
-        .eyebrow { font-size: 12px; color: var(--muted); font-weight: 600; }
-        .head h1 { margin: 4px 0 6px; font-size: 26px; letter-spacing: -0.02em; line-height: 1.2; }
-        .head .when { color: var(--muted); font-size: 13px; }
-        .badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 700;
-                 background: var(--panel-2); border: 1px solid var(--line); white-space: nowrap; }
-        .note { margin: 0 20px 20px; padding: 12px 14px; border-radius: 12px; font-size: 13px; border: 1px solid var(--line); }
-        .note.CHECK_GAP { background: rgba(245, 165, 36, 0.08); border-color: rgba(245, 165, 36, 0.35); }
-        .note.NO_DATA { background: rgba(255, 107, 107, 0.08); border-color: rgba(255, 107, 107, 0.35); }
-
-        .chart-card { overflow: hidden; }
+        /* broadcast */
+        .bcast-head { padding: 22px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: center; }
+        .bcast-head .who { display: flex; gap: 14px; align-items: center; }
+        .bcast-head h1 { margin: 0; font-size: 24px; letter-spacing: -0.02em; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .bcast-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+        .note { margin: 0 22px 22px; padding: 12px 14px; border-radius: 12px; font-size: 13px; border: 1px solid var(--line); background: var(--panel-2); }
         .tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
         @media (max-width: 720px) { .tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-        .tab { all: unset; box-sizing: border-box; cursor: pointer; padding: 16px 18px; display: grid; gap: 2px; border-right: 1px solid var(--line);
-               position: relative; }
+        .tab { all: unset; box-sizing: border-box; cursor: pointer; padding: 16px 18px; display: grid; gap: 2px; border-right: 1px solid var(--line); position: relative; }
         .tab:last-child { border-right: 0; }
-        .tab:hover { background: var(--panel-2); }
+        .tab:hover, .tab[aria-pressed="true"] { background: var(--panel-2); }
         .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-        .tab[aria-pressed="true"] { background: var(--panel-2); }
         .tab[aria-pressed="true"]::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--tab-color); }
         .tab .label { font-size: 12px; color: var(--muted); font-weight: 600; display: flex; align-items: center; gap: 6px; }
         .tab .label i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--tab-color); }
@@ -118,91 +165,109 @@
         .tab .value small { font-size: 14px; }
         .tab .sub { font-size: 12px; color: var(--muted); }
         .chart-wrap { padding: 16px 16px 8px; }
-        .chart-box { position: relative; height: 320px; }
         .chart-foot { display: flex; gap: 16px; flex-wrap: wrap; padding: 0 20px 16px; font-size: 12px; color: var(--muted); }
         .swatch { display: inline-block; width: 12px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; }
-
         .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
         @media (max-width: 720px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-        .stat { padding: 14px 16px; display: grid; gap: 2px; }
-        .stat .label { font-size: 12px; color: var(--muted); font-weight: 600; }
-        .stat .value { font-size: 20px; font-weight: 800; }
-        .stat .sub { font-size: 12px; color: var(--muted); }
-
+        .stat-card { padding: 14px 16px; display: grid; gap: 2px; }
+        .stat-card .label { font-size: 12px; color: var(--muted); font-weight: 600; }
+        .stat-card .value { font-size: 20px; font-weight: 800; }
+        .stat-card .sub { font-size: 12px; color: var(--muted); }
         .lower { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; }
-        @media (max-width: 960px) { .lower { grid-template-columns: 1fr; } }
+        @media (max-width: 900px) { .lower { grid-template-columns: 1fr; } }
         .card-title { padding: 16px 18px 0; font-weight: 700; display: flex; justify-content: space-between; gap: 8px; }
         .card-title span { font-weight: 500; color: var(--muted); font-size: 12px; }
         .small-chart { position: relative; height: 200px; padding: 8px 12px 12px; }
-        .rank { padding: 10px 12px 14px; display: grid; gap: 4px; }
-        .rank-row { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px;
-                    align-items: center; padding: 8px; border-radius: 10px; }
-        .rank-row:hover { background: var(--panel-2); }
-        .rank-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-        .rank-row[aria-current="true"] { background: var(--accent-soft); }
-        .rank-row .pos { color: var(--muted); font-weight: 700; font-size: 12px; }
-        .rank-row .bar-label { display: grid; gap: 4px; min-width: 0; }
-        .rank-row .bar-label span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
-        .bar { height: 6px; border-radius: 3px; background: var(--accent); opacity: 0.85; display: block; }
-        .muted { color: var(--muted); }
-        .empty { padding: 24px; color: var(--muted); }
-        .error { padding: 20px; border-radius: 12px; border: 1px solid rgba(255, 107, 107, 0.35); background: rgba(255, 107, 107, 0.08); }
+        .others { padding: 8px 10px 12px; display: grid; gap: 2px; }
+        .other { padding: 10px; border-radius: 10px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+        .other:hover { background: var(--panel-2); }
+        .other:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+        .other[aria-current="page"] { background: var(--accent-soft); }
+        .other span { font-size: 12px; color: var(--muted); display: block; }
+
+        footer { color: var(--muted); font-size: 12px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+                 border-top: 1px solid var(--line); padding-top: 16px; }
+        footer a { color: var(--muted); text-decoration: underline; }
     </style>
 </head>
 <body>
+<header class="topbar">
+    <div class="topbar-inner">
+        <a class="brand" href="#/"><span class="brand-mark">C</span>CHZZK 채팅 리포트</a>
+        <span class="updated num" id="updated">불러오는 중</span>
+    </div>
+</header>
 <div class="shell">
-    <header class="topbar">
-        <div class="brand"><span class="brand-mark">G</span>CHZZK 방송 분석</div>
-        <div class="live" id="live" aria-label="지금 채팅 속도"></div>
-        <div class="meta-right"><span id="computed" class="num">계산 시각 확인 중</span><a href="{{ collector_url }}/dashboard">수집 대시보드 →</a></div>
-    </header>
-
-    <section class="overview" id="overview" aria-label="전체 요약"></section>
-
-    <section class="main">
-        <nav class="panel side" id="sessions" aria-label="방송 회차 목록"><div class="empty">불러오는 중</div></nav>
-        <main class="detail" id="detail" aria-live="polite"><div class="panel empty">회차를 고르세요</div></main>
-    </section>
+    <main id="view" aria-live="polite"><div class="empty">불러오는 중</div></main>
+    <footer>
+        <span>수집을 시작한 시각부터 집계합니다. 후원 금액은 원화 결제(CURRENCY) 후원의 합계입니다.</span>
+        <a href="{{ collector_url }}/dashboard">운영자 화면</a>
+    </footer>
 </div>
 
 <script>
 const REFRESH_MS = {{ refresh_seconds }} * 1000;
-const STATUS = { OK: '정상', CHECK_GAP: '수집 공백 확인 필요', NO_DATA: '수집 데이터 없음', LIVE: '방송 중' };
-const STATUS_NOTE = {
-    CHECK_GAP: '이벤트가 오래 비어 있는 구간이 있습니다. 조용했던 방송일 수도, 수집이 끊겼던 구간일 수도 있습니다. 차트의 붉은 띠를 확인하세요.',
-    NO_DATA: '수집기는 이 시간에 연결돼 있었지만 정제된 이벤트가 하나도 없습니다. 수집 경로(Collector·Kafka·Bronze·Silver)가 멈췄을 가능성이 큽니다.',
-};
 const METRICS = {
     chat: { label: '채팅', field: 'chat_count', color: '--accent', type: 'line',
-            total: s => s.chat_count, sub: s => `클린봇 가림 ${num(s.blinded_chat_count)}` },
+            total: s => s.chat_count, sub: s => `클린봇이 가린 채팅 ${num(s.blinded_chat_count)}` },
     chatters: { label: '채팅한 사람', field: 'unique_chatters', color: '--blue', type: 'line', hourly: 'mean',
-                total: s => s.unique_chatters, sub: () => '회차 전체, 같은 사람은 한 번' },
-    donations: { label: '후원', field: 'donation_count', color: '--gold', type: 'bar', unit: '건',
-                 total: s => s.donation_count, sub: s => `CURRENCY ${num(s.donation_amount_currency)} · 익명 ${num(s.anonymous_donation_count)}` },
+                total: s => s.unique_chatters, sub: () => '한 번이라도 채팅한 계정 수' },
+    // Amount leads; the count is supporting detail. pay_type CURRENCY is shown in won (confirmed by the operator).
+    donations: { label: '후원 금액', field: 'donation_amount_currency', color: '--gold', type: 'bar', unit: '원',
+                 total: s => s.donation_amount_currency,
+                 sub: s => `${num(s.donation_count)}건 · 익명 ${num(s.anonymous_donation_count)}건` },
     subs: { label: '구독 알림', field: 'subscription_notification_count', color: '--violet', type: 'bar', unit: '건',
-            total: s => s.subscription_notification_count, sub: s => `구독 선물 ${num(s.subscription_gift_count)} · 가입·갱신 수 아님` },
+            total: s => s.subscription_notification_count, sub: s => `구독 선물 ${num(s.subscription_gift_count)}` },
 };
+const AVATAR = ['#2fa47c', '#4f7fe0', '#c0762f', '#8a5ad6', '#d0506a', '#2b98b5', '#7f9a2e', '#b45cb0'];
 const kstTime = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false });
-const kstDay = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', weekday: 'short' });
+const kstDay = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: 'long', day: 'numeric', weekday: 'short' });
+const kstShort = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric' });
 const kstHour = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Seoul', hour: 'numeric', hour12: false });
-const kstStamp = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
 const num = (v, digits = 0) => v == null ? '–' : Number(v).toLocaleString('ko-KR', { maximumFractionDigits: digits });
 const time = iso => iso ? kstTime.format(new Date(iso)) : '지금';
 const day = date => kstDay.format(new Date(`${date}T12:00:00+09:00`));
+const shortDay = date => kstShort.format(new Date(`${date}T12:00:00+09:00`));
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const statusOf = s => s.ended_at ? s.data_status : 'LIVE';
-const label = s => esc(s.channel_name || s.channel_id);
+const isLive = s => !s.ended_at;
+const hours = minutes => minutes >= 60 ? `${Math.floor(minutes / 60)}시간 ${Math.round(minutes % 60)}분` : `${Math.round(minutes)}분`;
+const avatarColor = id => AVATAR[[...String(id)].reduce((a, c) => a + c.charCodeAt(0), 0) % AVATAR.length];
+// The profile image covers the initial; if it fails to load it removes itself and the initial shows through.
+const avatar = (c, size = '') => {
+    const image = live.get(c.id)?.channel_image_url;
+    return `<span class="avatar ${size} ${c.live ? 'live' : ''}" style="background:${avatarColor(c.id)}" aria-hidden="true">${esc([...c.name][0] || '?')}${
+        image ? `<img src="${esc(image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</span>`;
+};
+const channelHref = id => `#/channel/${encodeURIComponent(id)}`;
+const broadcastHref = s => `${channelHref(s.channel_id)}/broadcast/${s.session_id}`;
 
 let sessions = [];
-let selected = null;
+let live = new Map();
+let computedAt = null;
 let metric = 'chat';
 let detail = null;
-let computedAt = null;
 const charts = {};
 const shown = {};
 // Polls and clicks can overlap; each loader renders only the response to its most recent request.
 const latest = { sessions: 0, detail: 0 };
+
+function route() {
+    const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
+    if (parts[0] === 'channel' && parts[1]) {
+        return parts[2] === 'broadcast' && parts[3] ? { view: 'broadcast', channel: parts[1], session: Number(parts[3]) }
+                                                    : { view: 'channel', channel: parts[1] };
+    }
+    return { view: 'home' };
+}
+
+function changed(name, value) {
+    // Redraw only when the data behind the view changed, so an idle page does not flicker.
+    const key = JSON.stringify(value);
+    if (shown[name] === key) return false;
+    shown[name] = key;
+    return true;
+}
 
 async function getJson(url) {
     const response = await fetch(url);
@@ -211,106 +276,136 @@ async function getJson(url) {
     return body;
 }
 
-function changed(name, value) {
-    // Redraw only when the data behind a section changed, so an idle page does not flicker.
-    const key = JSON.stringify(value);
-    if (shown[name] === key) return false;
-    shown[name] = key;
-    return true;
+function statusChip(s) {
+    if (isLive(s)) return '<span class="live-badge">LIVE</span>';
+    if (s.data_status === 'NO_DATA') return '<span class="chip bad">수집된 채팅 없음</span>';
+    if (s.data_status === 'CHECK_GAP') return '<span class="chip warn">일부 구간 비어 있음</span>';
+    return '';
 }
 
-function renderComputed() {
-    const el = document.getElementById('computed');
-    if (!computedAt) { el.textContent = 'Gold 계산 기록 없음'; return; }
-    const seconds = Math.max(0, Math.round((Date.now() - new Date(computedAt)) / 1000));
-    const ago = seconds < 60 ? `${seconds}초` : seconds < 3600 ? `${Math.floor(seconds / 60)}분` : `${Math.floor(seconds / 3600)}시간`;
-    el.textContent = `Gold 갱신 ${kstStamp.format(new Date(computedAt))} · ${ago} 전`;
-}
-
-function sparkPath(values, width = 72, height = 28) {
+function sparkSvg(values, color = '--accent', width = 110, height = 32) {
     const max = Math.max(1, ...values);
     const step = width / Math.max(1, values.length - 1);
-    const points = values.map((v, i) => [i * step, height - 2 - (v / max) * (height - 4)]);
-    const line = points.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
-    return { line, area: `${line} L${width} ${height} L0 ${height} Z` };
+    const pts = values.map((v, i) => `${(i * step).toFixed(1)} ${(height - 2 - (v / max) * (height - 4)).toFixed(1)}`);
+    const line = `M${pts.join(' L')}`;
+    return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true">
+        <path d="${line} L${width} ${height} L0 ${height} Z" fill="var(${color})" opacity="0.14"/>
+        <path d="${line}" fill="none" stroke="var(${color})" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
 }
 
-async function loadLive() {
-    const el = document.getElementById('live');
-    let data;
-    try { data = await getJson('/api/live'); } catch (error) { data = { available: false, channels: [] }; }
-    if (!changed('live', data)) return;
-    if (!data.available) { el.innerHTML = '<span class="live-chip"><span class="dot off"></span><span class="muted">수집기 꺼짐</span></span>'; return; }
-    const monitoring = data.channels.filter(c => c.monitoring_status === 'monitoring');
-    el.innerHTML = monitoring.length ? monitoring.map(c => `
-        <span class="live-chip"><span class="dot pulse"></span>${esc(c.display_name)}<b class="num">${num(c.recent_events_per_minute)}</b><span class="muted">건/분</span></span>`).join('')
-        : '<span class="live-chip"><span class="dot off"></span><span class="muted">수집 중인 방송 없음</span></span>';
+function channelList() {
+    const map = new Map();
+    sessions.forEach(s => {
+        const c = map.get(s.channel_id) || { id: s.channel_id, name: s.channel_name || s.channel_id, sessions: [] };
+        c.sessions.push(s);
+        map.set(s.channel_id, c);
+    });
+    live.forEach((info, id) => { if (!map.has(id)) map.set(id, { id, name: info.display_name, sessions: [] }); });
+    return [...map.values()].map(c => {
+        // Averages use finished broadcasts only; a live one is still growing.
+        const withData = c.sessions.filter(s => !isLive(s) && s.chat_count > 0);
+        const sum = f => withData.reduce((a, s) => a + (s[f] || 0), 0);
+        const peak = c.sessions.reduce((b, s) => (s.peak_minute_chat_count || 0) > (b?.peak_minute_chat_count || 0) ? s : b, null);
+        const current = c.sessions.find(isLive);
+        const rate = live.get(c.id);
+        return { ...c, current, live: Boolean(current) || rate?.monitoring_status === 'monitoring', rate: rate?.recent_events_per_minute,
+                 broadcasts: c.sessions.length, avgChats: withData.length ? sum('chat_count') / withData.length : null,
+                 avgChatters: withData.length ? sum('unique_chatters') / withData.length : null,
+                 donations: c.sessions.reduce((a, s) => a + s.donation_count, 0),
+                 amount: c.sessions.reduce((a, s) => a + s.donation_amount_currency, 0), peak, last: c.sessions[0] };
+    }).sort((a, b) => (b.live - a.live) || String(b.last?.started_at || '').localeCompare(String(a.last?.started_at || '')));
 }
 
-function renderOverview() {
-    const counts = { OK: 0, CHECK_GAP: 0, NO_DATA: 0, LIVE: 0 };
-    sessions.forEach(s => counts[statusOf(s)]++);
-    const chats = sessions.reduce((a, s) => a + s.chat_count, 0);
-    const donations = sessions.reduce((a, s) => a + s.donation_count, 0);
-    const amount = sessions.reduce((a, s) => a + s.donation_amount_currency, 0);
-    const peak = sessions.reduce((best, s) => (s.peak_minute_chat_count || 0) > (best?.peak_minute_chat_count || 0) ? s : best, null);
-    const withData = sessions.filter(s => s.chat_count > 0).length;
-    const dot = (key, color) => counts[key] ? `<span class="legend-dot"><i style="background:var(${color})"></i>${STATUS[key]} ${counts[key]}</span>` : '';
-    document.getElementById('overview').innerHTML = `
-        <div class="panel kpi"><span class="label">방송 회차</span><span class="value num">${num(sessions.length)}</span>
-            <span class="sub">${dot('LIVE', '--accent')}${dot('OK', '--accent')}${dot('CHECK_GAP', '--warn')}${dot('NO_DATA', '--danger')}</span></div>
-        <div class="panel kpi"><span class="label">총 채팅 · 방송 회차 기준</span><span class="value num">${num(chats)}</span>
-            <span class="sub">데이터 있는 회차 평균 ${num(withData ? chats / withData : 0)}</span></div>
-        <div class="panel kpi"><span class="label">총 후원</span><span class="value num">${num(donations)}<small style="font-size:16px">건</small></span>
-            <span class="sub">CURRENCY ${num(amount)}</span></div>
-        <div class="panel kpi"><span class="label">최고 분당 채팅</span><span class="value num">${num(peak?.peak_minute_chat_count)}</span>
-            <span class="sub">${peak ? `${label(peak)} · ${kstStamp.format(new Date(peak.peak_minute_start))}` : '–'}</span></div>`;
+function broadcastRow(s, withAvatar) {
+    const c = { id: s.channel_id, name: s.channel_name || s.channel_id, live: isLive(s) };
+    return `<a class="panel bcast-row clickable ${withAvatar ? '' : 'no-avatar'}" href="${broadcastHref(s)}"
+              aria-label="${esc(c.name)} ${esc(day(s.broadcast_date_kst))} 방송, 채팅 ${num(s.chat_count)}">
+        ${withAvatar ? avatar(c) : ''}
+        <div class="title"><b>${withAvatar ? esc(c.name) : esc(day(s.broadcast_date_kst))} ${statusChip(s)}</b>
+            <span class="num">${withAvatar ? esc(shortDay(s.broadcast_date_kst)) + ' · ' : ''}${time(s.started_at)}–${time(s.ended_at)} · ${hours(s.duration_minutes || 0)}</span></div>
+        <div class="stat"><span>채팅</span><b class="num">${num(s.chat_count)}</b></div>
+        <div class="stat extra"><span>채팅한 사람</span><b class="num">${num(s.unique_chatters)}</b></div>
+        <div class="stat extra"><span>후원 금액</span><b class="num">${num(s.donation_amount_currency)}원</b> <small class="muted num">${num(s.donation_count)}건</small></div>
+        ${sparkSvg(s.sparkline, s.data_status === 'NO_DATA' ? '--danger' : '--accent')}
+    </a>`;
 }
 
-function renderSessions() {
-    const nav = document.getElementById('sessions');
-    if (!sessions.length) { nav.innerHTML = '<div class="empty">아직 방송 회차가 없습니다</div>'; return; }
-    const days = {};
-    sessions.forEach(s => (days[s.broadcast_date_kst] ??= []).push(s));
-    nav.innerHTML = Object.entries(days).map(([date, list]) => `
-        <div class="day">${esc(day(date))} 방송</div>
-        ${list.map(s => {
-            const status = statusOf(s), path = sparkPath(s.sparkline);
-            const color = status === 'NO_DATA' ? '--danger' : status === 'CHECK_GAP' ? '--warn' : '--accent';
-            return `<button class="row" type="button" data-id="${s.session_id}" aria-current="${s.session_id === selected}"
-                aria-label="${label(s)} ${time(s.started_at)}부터 ${time(s.ended_at)}까지, 채팅 ${num(s.chat_count)}, ${STATUS[status]}">
-                <span class="dot s-${status}"></span>
-                <span style="min-width:0"><div class="name">${label(s)}</div>
-                    <div class="when num">${time(s.started_at)}–${time(s.ended_at)} · 채팅 ${num(s.chat_count)}</div></span>
-                <svg viewBox="0 0 72 28" aria-hidden="true"><path d="${path.area}" fill="var(${color})" opacity="0.14"/><path d="${path.line}" fill="none" stroke="var(${color})" stroke-width="1.5"/></svg>
-            </button>`; }).join('')}`).join('');
-    nav.querySelectorAll('.row').forEach(b => b.addEventListener('click', () => select(Number(b.dataset.id))));
+function renderHome() {
+    const channels = channelList();
+    const onAir = channels.filter(c => c.live);
+    document.getElementById('view').innerHTML = `
+        <section class="hero">
+            <h1>방송의 채팅 흐름을 한눈에</h1>
+            <p>채널을 고르면 방송마다 채팅이 얼마나, 언제 몰렸는지와 후원·구독 흐름을 볼 수 있어요.</p>
+        </section>
+        ${onAir.length ? `<section><div class="section-title"><h2>지금 방송 중</h2><span>${onAir.length}개 채널</span></div>
+            <div class="live-grid">${onAir.map(c => `
+                <a class="panel live-card clickable" href="${c.current ? broadcastHref(c.current) : channelHref(c.id)}" aria-label="${esc(c.name)} 방송 보기">
+                    <div class="who">${avatar(c)}<div><b>${esc(c.name)}</b><span class="live-badge">LIVE</span></div></div>
+                    <div class="rate"><strong class="num">${num(c.rate)}</strong><span class="muted">채팅/분 · 최근 1분</span></div>
+                    <div class="facts">${c.current ? `<span class="num">${time(c.current.started_at)}부터</span><span class="num">채팅 ${num(c.current.chat_count)}</span><span class="num">채팅한 사람 ${num(c.current.unique_chatters)}</span>` : '<span>집계 준비 중</span>'}</div>
+                </a>`).join('')}</div></section>` : ''}
+        <section><div class="section-title"><h2>채널</h2><span>${channels.length}개</span></div>
+            <div class="channel-grid">${channels.map(c => `
+                <a class="panel channel-card clickable" href="${channelHref(c.id)}" aria-label="${esc(c.name)} 채널 보기">
+                    <div class="who">${avatar(c)}<div><b>${esc(c.name)}</b><span>${c.live ? '방송 중' : c.last ? `최근 방송 ${esc(shortDay(c.last.broadcast_date_kst))}` : '아직 방송 기록 없음'}</span></div></div>
+                    <div class="mini-stats">
+                        <div><span>방송</span><b class="num">${num(c.broadcasts)}회</b></div>
+                        <div><span>방송당 채팅</span><b class="num">${num(c.avgChats)}</b></div>
+                        <div><span>최고 분당</span><b class="num">${num(c.peak?.peak_minute_chat_count)}</b></div>
+                    </div>
+                    ${c.last ? sparkSvg(c.last.sparkline, '--accent', 220, 40) : ''}
+                </a>`).join('')}</div></section>
+        <section><div class="section-title"><h2>최근 방송</h2><span>모든 채널</span></div>
+            <div class="recent">${sessions.slice(0, 6).map(s => broadcastRow(s, true)).join('') || '<div class="panel empty">아직 방송 기록이 없어요</div>'}</div></section>`;
 }
 
-function select(id) {
-    selected = id;
-    delete shown.sessions;
-    renderSessions();
-    loadDetail();
-}
-
-async function loadSessions() {
-    const ticket = ++latest.sessions;
-    let data;
-    try { data = await getJson('/api/sessions'); }
-    catch (error) {
-        if (ticket !== latest.sessions) return;
-        delete shown.sessions;
-        document.getElementById('sessions').innerHTML = `<div class="error">${esc(error.message)}</div>`;
-        document.getElementById('overview').innerHTML = '';
-        return;
-    }
-    if (ticket !== latest.sessions) return;
-    computedAt = data.computed_at;
-    renderComputed();
-    sessions = data.sessions;
-    if (selected == null || !sessions.some(s => s.session_id === selected)) selected = sessions[0]?.session_id ?? null;
-    if (changed('sessions', [sessions, selected])) { renderOverview(); renderSessions(); }
+function renderChannel(id) {
+    const c = channelList().find(x => x.id === id);
+    const view = document.getElementById('view');
+    if (!c) { view.innerHTML = `<div class="crumbs"><a href="#/">홈</a></div><div class="panel empty">이 채널의 기록이 없어요</div>`; return; }
+    const ordered = [...c.sessions].reverse();
+    view.innerHTML = `
+        <nav class="crumbs" aria-label="위치"><a href="#/">홈</a><span>›</span><b>${esc(c.name)}</b></nav>
+        <section class="panel channel-head">
+            ${avatar(c, 'lg')}
+            <div><h1>${esc(c.name)} ${c.live ? '<span class="live-badge">LIVE</span>' : ''}</h1>
+                <p class="num">방송 ${num(c.broadcasts)}회 기록${c.last ? ` · 최근 ${esc(day(c.last.broadcast_date_kst))}` : ''}</p></div>
+            ${c.live ? `<div class="now"><strong class="num">${num(c.rate)}</strong><span class="muted">지금 채팅/분</span></div>` : ''}
+        </section>
+        <section class="kpis">
+            <div class="panel kpi"><span class="label">방송당 평균 채팅</span><span class="value num">${num(c.avgChats)}</span><span class="sub">끝난 방송 중 채팅이 수집된 방송 기준</span></div>
+            <div class="panel kpi"><span class="label">방송당 평균 채팅한 사람</span><span class="value num">${num(c.avgChatters)}</span><span class="sub">방송마다 한 번씩 센 인원</span></div>
+            <div class="panel kpi"><span class="label">지금까지 받은 후원 금액</span><span class="value num">${num(c.amount)}<small>원</small></span><span class="sub num">${num(c.donations)}건</span></div>
+            <div class="panel kpi"><span class="label">가장 붐빈 순간</span><span class="value num">${num(c.peak?.peak_minute_chat_count)}<small>/분</small></span>
+                <span class="sub">${c.peak?.peak_minute_start ? `${esc(shortDay(c.peak.broadcast_date_kst))} ${time(c.peak.peak_minute_start)}` : '–'}</span></div>
+        </section>
+        <section class="panel chart-panel">
+            <div class="section-title"><h2>방송별 채팅</h2><span>막대를 누르면 그 방송으로 이동해요</span></div>
+            <div class="chart-box"><canvas id="channel-chart" aria-label="방송별 채팅 수와 채팅한 사람"></canvas></div>
+        </section>
+        <section><div class="section-title"><h2>방송 기록</h2><span>최신순</span></div>
+            <div class="recent">${c.sessions.map(s => broadcastRow(s, false)).join('') || '<div class="panel empty">아직 방송 기록이 없어요</div>'}</div></section>`;
+    charts.channel?.destroy();
+    if (!ordered.length) return;
+    charts.channel = new Chart(document.getElementById('channel-chart'), {
+        data: {
+            labels: ordered.map(s => `${shortDay(s.broadcast_date_kst)} ${time(s.started_at)}`),
+            datasets: [
+                { type: 'bar', label: '채팅', data: ordered.map(s => s.chat_count), backgroundColor: ordered.map(s => css(isLive(s) ? '--live' : '--accent')),
+                  borderRadius: 6, maxBarThickness: 44, yAxisID: 'y' },
+                { type: 'line', label: '채팅한 사람', data: ordered.map(s => s.unique_chatters), borderColor: css('--blue'), backgroundColor: css('--blue'),
+                  pointRadius: 3, tension: 0, yAxisID: 'y2' },
+            ],
+        },
+        options: {
+            animation: false, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+            onClick: (_e, items) => { if (items.length) location.hash = broadcastHref(ordered[items[0].index]); },
+            onHover: (e, items) => { e.native.target.style.cursor = items.length ? 'pointer' : 'default'; },
+            scales: { ...axisOptions(), y2: { beginAtZero: true, position: 'right', grid: { display: false }, ticks: { color: css('--muted'), precision: 0 } } },
+            plugins: { legend: { labels: { color: css('--ink'), boxWidth: 12 } }, tooltip: tooltipOptions() },
+        },
+    });
 }
 
 const gapBands = {
@@ -367,8 +462,13 @@ function axisOptions() {
 
 function tooltipOptions(m) {
     return { backgroundColor: css('--panel-2'), borderColor: css('--line'), borderWidth: 1, titleColor: css('--ink'),
-             bodyColor: css('--ink'), padding: 10, displayColors: false,
-             callbacks: { label: c => `${m.label} ${num(c.parsed.y)}${m.unit || ''}` } };
+             bodyColor: css('--ink'), padding: 10, displayColors: !m,
+             callbacks: m ? { label: c => `${m.label} ${num(c.parsed.y)}${m.unit || ''}` } : {} };
+}
+
+function hourlyTitle(m) {
+    // Per-minute unique chatters cannot be summed into hourly unique chatters, so that metric shows the minute average.
+    return m.hourly === 'mean' ? `시간대별 분당 ${m.label} 평균` : `시간대별 ${m.label}`;
 }
 
 function drawMain() {
@@ -410,60 +510,48 @@ function drawMain() {
     });
 }
 
-function hourlyTitle(m) {
-    // Per-minute unique chatters cannot be summed into hourly unique chatters, so that metric shows the minute average.
-    return m.hourly === 'mean' ? `시간대별 분당 ${m.label} 평균` : `시간대별 ${m.label}`;
-}
-
 function drawHourly() {
     const m = METRICS[metric], color = css(m.color);
-    const hours = new Map();
+    const byHour = new Map();
     detail.minutes.forEach(p => {
         const hour = Number(kstHour.format(new Date(p.minute_start))) % 24;
-        const [total, minutes] = hours.get(hour) || [0, 0];
-        hours.set(hour, [total + p[m.field], minutes + 1]);
+        const [total, minutes] = byHour.get(hour) || [0, 0];
+        byHour.set(hour, [total + p[m.field], minutes + 1]);
     });
-    const values = [...hours.values()].map(([total, minutes]) => m.hourly === 'mean' ? total / minutes : total);
+    const values = [...byHour.values()].map(([total, minutes]) => m.hourly === 'mean' ? total / minutes : total);
     charts.hourly?.destroy();
     charts.hourly = new Chart(document.getElementById('hourly-chart'), {
         type: 'bar',
-        data: { labels: [...hours.keys()].map(h => `${h}시`),
-                datasets: [{ data: values, backgroundColor: color, borderRadius: 4, maxBarThickness: 28 }] },
+        data: { labels: [...byHour.keys()].map(h => `${h}시`), datasets: [{ data: values, backgroundColor: color, borderRadius: 4, maxBarThickness: 28 }] },
         options: { animation: false, maintainAspectRatio: false, scales: axisOptions(),
                    plugins: { legend: { display: false }, tooltip: tooltipOptions(m) } },
     });
 }
 
-function renderRanking() {
-    const top = [...sessions].filter(s => s.chat_count > 0).sort((a, b) => b.chat_count - a.chat_count).slice(0, 6);
-    const max = Math.max(1, ...top.map(s => s.chat_count));
-    document.getElementById('ranking').innerHTML = top.length ? top.map((s, i) => `
-        <button class="rank-row" type="button" data-id="${s.session_id}" aria-current="${s.session_id === selected}"
-            aria-label="${i + 1}위 ${label(s)}, 채팅 ${num(s.chat_count)}">
-            <span class="pos num">${i + 1}</span>
-            <span class="bar-label"><span>${label(s)} <span class="muted">· ${esc(day(s.broadcast_date_kst))}</span></span>
-                <i class="bar" style="width:${(s.chat_count / max * 100).toFixed(1)}%"></i></span>
-            <span class="num">${num(s.chat_count)}</span>
-        </button>`).join('') : '<div class="empty">채팅이 있는 회차가 없습니다</div>';
-    document.querySelectorAll('.rank-row').forEach(b => b.addEventListener('click', () => select(Number(b.dataset.id))));
-}
-
-function renderDetail() {
-    const s = detail.session, status = statusOf(s), m = METRICS[metric];
+function renderBroadcast() {
+    const s = detail.session, m = METRICS[metric];
+    const c = { id: s.channel_id, name: s.channel_name || s.channel_id, live: isLive(s) };
+    const others = sessions.filter(x => x.channel_id === s.channel_id).slice(0, 8);
     const perChatter = s.unique_chatters ? s.chat_count / s.unique_chatters : null;
-    const slots = detail.minutes.length;  // the calendar minutes the chart covers, same range as active_minutes
-    const coverage = slots ? Math.min(100, s.active_minutes / slots * 100) : null;
-    document.getElementById('detail').innerHTML = `
+    const slots = detail.minutes.length;  // the calendar minutes the chart covers
+    // Counted from chat minutes here: Gold's active_minutes also counts minutes with only donations or subscriptions.
+    const chatMinutes = detail.minutes.filter(p => p.chat_count > 0).length;
+    const coverage = slots ? chatMinutes / slots * 100 : null;
+    const note = isLive(s) ? '' : s.data_status === 'NO_DATA'
+        ? '이 방송은 수집된 채팅이 없어요. 수집이 멈춰 있던 시간으로 보여요.'
+        : s.data_status === 'CHECK_GAP' ? `중간에 채팅이 ${num(detail.gap_minutes)}분 넘게 기록되지 않은 구간이 있어요(가장 길게 ${num(s.max_gap_minutes, 0)}분). 방송이 조용했거나 수집이 잠시 끊겼을 수 있어요. 차트의 붉은 띠가 그 구간이에요.` : '';
+    document.getElementById('view').innerHTML = `
+        <nav class="crumbs" aria-label="위치"><a href="#/">홈</a><span>›</span><a href="${channelHref(c.id)}">${esc(c.name)}</a><span>›</span><b>${esc(day(s.broadcast_date_kst))} 방송</b></nav>
         <section class="panel">
-            <div class="head">
-                <div><div class="eyebrow">${esc(day(s.broadcast_date_kst))} 방송 · 회차 ${s.session_id}</div>
-                    <h1>${label(s)}</h1>
-                    <div class="when num">${kstStamp.format(new Date(s.started_at))} – ${s.ended_at ? kstStamp.format(new Date(s.ended_at)) : '진행 중'} · ${num(s.duration_minutes)}분 수집${s.stop_reason ? ` · ${esc(s.stop_reason)}` : ''}</div></div>
-                <span class="badge"><span class="dot s-${status} ${status === 'LIVE' ? 'pulse' : ''}"></span>${STATUS[status]}</span>
+            <div class="bcast-head">
+                <div class="who">${avatar(c, 'lg')}<div>
+                    <h1>${esc(day(s.broadcast_date_kst))} 방송 ${statusChip(s)}</h1>
+                    <p class="num"><a href="${channelHref(c.id)}"><b>${esc(c.name)}</b></a> · ${time(s.started_at)}–${s.ended_at ? time(s.ended_at) : '진행 중'} · ${hours(s.duration_minutes || 0)}</p></div></div>
+                ${isLive(s) && live.get(c.id) ? `<div class="now"><strong class="num" style="font-size:28px;font-weight:800">${num(live.get(c.id).recent_events_per_minute)}</strong> <span class="muted">지금 채팅/분</span></div>` : ''}
             </div>
-            ${STATUS_NOTE[status] ? `<p class="note ${status}">${STATUS_NOTE[status]} 가장 긴 공백 <b class="num">${num(s.max_gap_minutes, 1)}분</b>.</p>` : ''}
+            ${note ? `<p class="note">${note}</p>` : ''}
         </section>
-        <section class="panel chart-card">
+        <section class="panel" style="overflow:hidden">
             <div class="tabs" role="group" aria-label="차트 지표">
                 ${Object.entries(METRICS).map(([key, x]) => `
                     <button class="tab" type="button" data-metric="${key}" aria-pressed="${key === metric}" style="--tab-color:var(${x.color})"
@@ -475,61 +563,89 @@ function renderDetail() {
             </div>
             <div class="chart-wrap"><div class="chart-box"><canvas id="main-chart" aria-label="분 단위 ${m.label}"></canvas></div></div>
             <div class="chart-foot">
-                <span><i class="swatch" style="background:var(${m.color})"></i>분 단위 ${m.label}${metric === 'chatters' ? ' (그 분에 채팅한 사람)' : ''}</span>
-                <span><i class="swatch" style="background:var(--gap);border:1px solid var(--danger)"></i>이벤트가 ${num(detail.gap_minutes)}분 넘게 없던 구간 ${num(detail.gaps.length)}개</span>
-                ${metric === 'donations' ? '<span>후원 금액 단위는 확인되지 않아 원화로 표기하지 않습니다</span>' : ''}
+                <span><i class="swatch" style="background:var(${m.color})"></i>분 단위 ${m.label}${metric === 'chatters' ? ' (그 1분 동안 채팅한 사람)' : ''}</span>
+                ${detail.gaps.length ? `<span><i class="swatch" style="background:var(--gap);border:1px solid var(--danger)"></i>채팅·후원·구독이 모두 ${num(detail.gap_minutes)}분 넘게 없던 구간 ${num(detail.gaps.length)}개</span>` : ''}
             </div>
         </section>
         <section class="stats">
-            <div class="panel stat"><span class="label">분당 채팅</span><span class="value num">${num(s.chats_per_minute, 1)}</span><span class="sub">수집 시간 전체 기준</span></div>
-            <div class="panel stat"><span class="label">가장 붐빈 분</span><span class="value num">${s.peak_minute_start ? time(s.peak_minute_start) : '–'}</span><span class="sub">${s.peak_minute_chat_count ? `${num(s.peak_minute_chat_count)}건` : '채팅 없음'}</span></div>
-            <div class="panel stat"><span class="label">1인당 채팅</span><span class="value num">${num(perChatter, 1)}</span><span class="sub">채팅 ÷ 채팅한 사람</span></div>
-            <div class="panel stat"><span class="label">이벤트 있는 분</span><span class="value num">${coverage == null ? '–' : `${num(coverage)}%`}</span><span class="sub">${num(s.active_minutes)}분 / ${num(slots)}분</span></div>
+            <div class="panel stat-card"><span class="label">분당 채팅</span><span class="value num">${num(s.chats_per_minute, 1)}</span><span class="sub">방송 전체 평균</span></div>
+            <div class="panel stat-card"><span class="label">가장 붐빈 순간</span><span class="value num">${s.peak_minute_start ? time(s.peak_minute_start) : '–'}</span><span class="sub">${s.peak_minute_chat_count ? `1분에 ${num(s.peak_minute_chat_count)}건` : '채팅 없음'}</span></div>
+            <div class="panel stat-card"><span class="label">1인당 채팅</span><span class="value num">${num(perChatter, 1)}</span><span class="sub">채팅 ÷ 채팅한 사람</span></div>
+            <div class="panel stat-card"><span class="label">채팅이 있던 시간</span><span class="value num">${coverage == null ? '–' : `${num(coverage)}%`}</span><span class="sub">${num(chatMinutes)}분 / ${num(slots)}분</span></div>
         </section>
         <section class="lower">
-            <div class="panel"><div class="card-title">${hourlyTitle(m)}<span>KST 시 기준</span></div><div class="small-chart"><canvas id="hourly-chart" aria-label="${hourlyTitle(m)}"></canvas></div></div>
-            <div class="panel"><div class="card-title">채팅 많은 회차<span>전체 회차</span></div><div class="rank" id="ranking"></div></div>
+            <div class="panel"><div class="card-title">${hourlyTitle(m)}<span>한국 시간</span></div><div class="small-chart"><canvas id="hourly-chart" aria-label="${hourlyTitle(m)}"></canvas></div></div>
+            <div class="panel"><div class="card-title">${esc(c.name)}의 다른 방송<span><a href="${channelHref(c.id)}">모두 보기 ›</a></span></div>
+                <div class="others">${others.map(o => `
+                    <a class="other" href="${broadcastHref(o)}" ${o.session_id === s.session_id ? 'aria-current="page"' : ''}>
+                        <div><b>${esc(day(o.broadcast_date_kst))}</b> ${statusChip(o)}<span class="num">${time(o.started_at)}–${time(o.ended_at)}</span></div>
+                        <b class="num">${num(o.chat_count)}</b></a>`).join('')}</div></div>
         </section>`;
-    document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { metric = b.dataset.metric; renderDetail(); }));
-    renderRanking();
+    document.querySelectorAll('.tab').forEach(b => b.addEventListener('click', () => { metric = b.dataset.metric; renderBroadcast(); }));
     drawMain();
     drawHourly();
 }
 
-async function loadDetail() {
-    if (selected == null) {
-        latest.detail++;  // a request still in flight for a session that just disappeared must not render
-        detail = null;
-        delete shown.detail;
-        document.getElementById('detail').innerHTML = '<div class="panel empty">회차를 고르세요</div>';
-        return;
+function renderUpdated() {
+    const el = document.getElementById('updated');
+    if (!computedAt) { el.textContent = ''; return; }
+    const seconds = Math.max(0, Math.round((Date.now() - new Date(computedAt)) / 1000));
+    el.textContent = `업데이트 ${seconds < 60 ? `${seconds}초` : seconds < 3600 ? `${Math.floor(seconds / 60)}분` : `${Math.floor(seconds / 3600)}시간`} 전`;
+}
+
+async function loadSessions() {
+    const ticket = ++latest.sessions;
+    const [list, rates] = await Promise.all([getJson('/api/sessions').catch(e => e), getJson('/api/live').catch(() => ({ channels: [] }))]);
+    if (ticket !== latest.sessions) return false;
+    if (list instanceof Error) {
+        delete shown.view;
+        document.getElementById('view').innerHTML = `<div class="error">${esc(list.message)}</div>`;
+        return false;
     }
-    // A slower response, for another session or an older read of the same one, must not replace a newer one.
-    const ticket = ++latest.detail, requested = selected;
+    computedAt = list.computed_at;
+    renderUpdated();
+    sessions = list.sessions;
+    live = new Map(rates.channels.map(c => [c.channel_id, c]));
+    return true;
+}
+
+async function loadDetail(id) {
+    // A slower response, for another broadcast or an older read of the same one, must not replace a newer one.
+    const ticket = ++latest.detail;
     let data;
-    try { data = await getJson(`/api/sessions/${requested}`); }
+    try { data = await getJson(`/api/sessions/${id}`); }
     catch (error) {
-        if (ticket !== latest.detail) return;
-        delete shown.detail;
-        document.getElementById('detail').innerHTML = `<div class="panel error">${esc(error.message)}</div>`;
+        if (ticket !== latest.detail) return null;
+        delete shown.view;
+        document.getElementById('view').innerHTML = `<div class="crumbs"><a href="#/">홈</a></div><div class="error">${esc(error.message)}</div>`;
+        return null;
+    }
+    return ticket === latest.detail ? data : null;
+}
+
+async function render() {
+    const r = route();
+    if (!(await loadSessions())) return;
+    const rates = [...live.values()].map(c => [c.channel_id, c.recent_events_per_minute, c.monitoring_status]);
+    if (r.view === 'broadcast') {
+        const data = await loadDetail(r.session);
+        if (!data || JSON.stringify(route()) !== JSON.stringify(r)) return;
+        if (!changed('view', [r, metric, data, rates, sessions.filter(s => s.channel_id === r.channel)])) return;
+        detail = data;
+        renderBroadcast();
         return;
     }
-    if (ticket !== latest.detail) return;
-    if (!changed('detail', [data, requested, sessions.map(s => [s.session_id, s.chat_count])])) return;
-    detail = data;
-    renderDetail();
+    latest.detail++;  // leaving a broadcast: a request still in flight for it must not render
+    if (!changed('view', [r, sessions, rates])) return;
+    if (r.view === 'channel') renderChannel(r.channel); else renderHome();
 }
 
-async function refresh() {
-    await Promise.all([loadSessions(), loadLive()]);
-    await loadDetail();
-}
-
+window.addEventListener('hashchange', () => { metric = 'chat'; delete shown.view; window.scrollTo(0, 0); render(); });
 // Chart colors come from CSS tokens, so redraw when the system theme flips.
-window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { if (detail) renderDetail(); });
-refresh();
-setInterval(refresh, REFRESH_MS);
-setInterval(renderComputed, 1000);
+window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { delete shown.view; render(); });
+render();
+setInterval(render, REFRESH_MS);
+setInterval(renderUpdated, 1000);
 </script>
 </body>
 </html>

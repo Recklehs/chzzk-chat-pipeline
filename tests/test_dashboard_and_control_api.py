@@ -17,9 +17,10 @@ def load_collector_module():
 
 
 class FakeLiveStatusClient:
-    def __init__(self, snapshots, metadata=None):
+    def __init__(self, snapshots, metadata=None, live_ids=None):
         self.snapshots = snapshots
         self.metadata = metadata or {}
+        self.live_ids = live_ids or {}
         self.calls = []
         self.metadata_calls = []
 
@@ -37,6 +38,9 @@ class FakeLiveStatusClient:
             return result()
         return result
 
+    async def fetch_live_id(self, channel_id):
+        return self.live_ids.get(channel_id)
+
 
 class FakeMonitorTaskFactory:
     def __init__(self):
@@ -47,7 +51,7 @@ class FakeMonitorTaskFactory:
     async def __call__(self, channel_id, streamer_nickname, counter, live_status_client=None, raw_publisher=None, on_connected=None):
         self.started.append((channel_id, streamer_nickname))
         self.raw_publishers.append(raw_publisher)
-        on_connected()
+        await on_connected()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -61,7 +65,7 @@ class CompletingMonitorTaskFactory:
 
     async def __call__(self, channel_id, streamer_nickname, counter, live_status_client=None, raw_publisher=None, on_connected=None):
         self.started.append((channel_id, streamer_nickname))
-        on_connected()
+        await on_connected()
         return
 
 
@@ -160,7 +164,7 @@ def fetch_monitoring_sessions(db_path):
     return [dict(row) for row in rows]
 
 
-async def build_active_coordinator(collector, tmp_path, *, channel_id="channel-open", channel_name="공식 오픈 채널"):
+async def build_active_coordinator(collector, tmp_path, *, channel_id="channel-open", channel_name="공식 오픈 채널", live_id=None):
     live_client = FakeLiveStatusClient(
         {
             channel_id: make_live_snapshot(collector, channel_id, normalized_status="OPEN"),
@@ -168,6 +172,7 @@ async def build_active_coordinator(collector, tmp_path, *, channel_id="channel-o
         metadata={
             channel_id: make_channel_metadata(collector, channel_id, channel_name=channel_name),
         },
+        live_ids={channel_id: live_id},
     )
     monitor_factory = FakeMonitorTaskFactory()
     store = collector.ChannelStore(str(tmp_path / "control.db"))
@@ -297,7 +302,7 @@ def test_monitoring_session_waits_for_connection_success(tmp_path):
         try:
             await coordinator.ensure_monitoring(channel)
             assert store.list_monitoring_sessions() == []
-            callbacks[0]()
+            await callbacks[0]()
             assert len(store.list_monitoring_sessions()) == 1
             assert store.get_open_monitoring_session("channel-open") is not None
         finally:
@@ -424,6 +429,70 @@ def test_live_status_not_found_closes_monitoring_session_with_unknown(tmp_path):
         assert sessions[0]["stop_reason"] == "UNKNOWN"
 
     asyncio.run(scenario())
+
+
+def test_same_broadcast_reopens_its_session(tmp_path):
+    collector = load_collector_module()
+    store = collector.ChannelStore(str(tmp_path / "control.db"))
+    first = store.start_monitoring_session("channel-1", "streamer", live_id=111)
+    store.finish_monitoring_session("channel-1", "SERVER_SHUTDOWN")
+
+    again = store.start_monitoring_session("channel-1", "streamer", live_id=111)
+    assert (again.id, again.ended_at, again.stop_reason, again.started_at) == (first.id, None, None, first.started_at)
+
+    store.finish_monitoring_session("channel-1", "BROADCAST_ENDED")
+    assert store.start_monitoring_session("channel-1", "streamer", live_id=222).id != first.id
+    store.finish_monitoring_session("channel-1", "BROADCAST_ENDED")
+    # An unknown id never matches, not even another unknown one.
+    unknown = store.start_monitoring_session("channel-1", "streamer")
+    store.finish_monitoring_session("channel-1", "SERVER_SHUTDOWN")
+    assert store.start_monitoring_session("channel-1", "streamer").id != unknown.id
+    assert len(store.list_monitoring_sessions()) == 4
+
+    # Still open without an id: a reconnect that does get one cannot prove it is the same broadcast, so it closes.
+    known = store.start_monitoring_session("channel-1", "streamer", live_id=333)
+    assert known.live_id == 333 and store.list_monitoring_sessions()[-2].stop_reason == "UNKNOWN"
+    # A failed lookup on a later reconnect keeps the open session rather than split the broadcast.
+    assert store.start_monitoring_session("channel-1", "streamer").id == known.id
+    # A reconnect onto a new broadcast closes the open one and opens another.
+    moved = store.start_monitoring_session("channel-1", "streamer", live_id=444)
+    assert moved.id != known.id and moved.live_id == 444
+    assert store.list_monitoring_sessions()[-2].stop_reason == "BROADCAST_ENDED"
+
+
+def test_collector_restart_keeps_one_session_per_broadcast(tmp_path):
+    collector = load_collector_module()
+
+    async def scenario():
+        coordinator, *_ = await build_active_coordinator(collector, tmp_path, live_id=111)
+        await coordinator.shutdown()
+        coordinator, *_ = await build_active_coordinator(collector, tmp_path, live_id=111)
+        sessions = fetch_monitoring_sessions(tmp_path / "control.db")
+        assert len(sessions) == 1 and sessions[0]["ended_at"] is None
+        await coordinator.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_live_id_column_added_to_existing_session_table(tmp_path):
+    collector = load_collector_module()
+    db_path = tmp_path / "control.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE monitoring_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id TEXT NOT NULL, channel_name TEXT,
+                started_at TEXT NOT NULL, ended_at TEXT, stop_reason TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            "INSERT INTO monitoring_sessions VALUES (1, 'channel-1', 'old', 't0', 't1', 'SERVER_SHUTDOWN', 't0', 't1')"
+        )
+    store = collector.ChannelStore(str(db_path))
+    assert store.list_monitoring_sessions()[0].live_id is None
+    assert store.start_monitoring_session("channel-1", "new", live_id=111).id == 2
 
 
 def test_app_shutdown_closes_monitoring_sessions_with_server_shutdown(tmp_path):
@@ -666,10 +735,12 @@ def test_channel_store_adds_channel_name_column_for_existing_db(tmp_path):
         connection.commit()
 
     store = collector.ChannelStore(str(db_path))
-    store.upsert_channel("channel-1", "alias-1", True, channel_name="공식 이름")
+    store.upsert_channel("channel-1", "alias-1", True, channel_name="공식 이름", channel_image_url="https://example.com/p.png")
+    store.upsert_channel("channel-1", "alias-1", False)
     stored = store.get_channel("channel-1")
 
     assert stored.channel_name == "공식 이름"
+    assert stored.channel_image_url == "https://example.com/p.png"
 
     with sqlite3.connect(db_path) as connection:
         table_names = {

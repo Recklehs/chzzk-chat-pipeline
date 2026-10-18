@@ -87,6 +87,7 @@ class StoredChannel:
     channel_id: str
     alias: str
     channel_name: str | None
+    channel_image_url: str | None
     enabled: bool
     last_live_status: str | None
     last_live_title: str | None
@@ -109,6 +110,7 @@ class MonitoringSession:
     stop_reason: str | None
     created_at: str
     updated_at: str
+    live_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,7 @@ class ResolvedControlChannel:
     channel_id: str
     alias: str
     channel_name: str | None
+    channel_image_url: str | None
     snapshot: "LiveSnapshot"
 
 
@@ -227,6 +230,38 @@ class LiveStatusClient:
             checked_at=now_iso(),
         )
 
+    async def fetch_live_id(self, channel_id: str, attempts: int = 2, retry_seconds: float = 0.5) -> int | None:
+        """CHZZK's id for the current broadcast; live-status leaves liveId empty, live-detail fills it. None if unknown.
+
+        Runs inside the connection callback, so the receive loop waits for it (the ping task keeps the socket alive);
+        attempts x timeout bounds that wait. One retry covers a transient 5xx or timeout, which would otherwise split
+        a broadcast into two sessions on the next restart.
+        """
+        url = f"{self.base_url}/service/v3/channels/{channel_id}/live-detail"
+        problem = None
+        for attempt in range(attempts):
+            if attempt:
+                await asyncio.sleep(retry_seconds)
+            try:
+                response = await asyncio.to_thread(
+                    requests.get, url, timeout=self.timeout_seconds, headers={"User-Agent": "Mozilla/5.0"}
+                )
+                payload = response.json()
+                if payload.get("code") != 200:
+                    problem = f"code={payload.get('code')}"
+                    continue
+                live_id = (payload.get("content") or {}).get("liveId")
+            except Exception as exc:
+                problem = str(exc)
+                continue
+            if isinstance(live_id, int) and not isinstance(live_id, bool):
+                return live_id
+            problem = "no liveId in response"
+        # Without an id the session cannot be matched to the last one, so a restart would split the broadcast.
+        print(f"[WARN] live-detail lookup failed for {channel_id} after {attempts} attempts ({problem}); "
+              f"session is not matched by broadcast")
+        return None
+
     async def fetch_channel_metadata(self, channel_id: str) -> ChannelMetadata:
         url = f"{self.base_url}/service/v1/channels/{channel_id}"
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -289,6 +324,7 @@ class ChannelStore:
                         channel_id TEXT PRIMARY KEY,
                         alias TEXT NOT NULL DEFAULT '',
                         channel_name TEXT,
+                        channel_image_url TEXT,
                         enabled INTEGER NOT NULL DEFAULT 1,
                         last_live_status TEXT,
                         last_live_title TEXT,
@@ -312,16 +348,25 @@ class ChannelStore:
                         ended_at TEXT,
                         stop_reason TEXT,
                         created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
+                        updated_at TEXT NOT NULL,
+                        live_id INTEGER
                     )
                     """
                 )
+                session_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(monitoring_sessions)").fetchall()
+                }
+                if "live_id" not in session_columns:
+                    connection.execute("ALTER TABLE monitoring_sessions ADD COLUMN live_id INTEGER")
                 columns = {
                     row["name"]
                     for row in connection.execute("PRAGMA table_info(monitored_channels)").fetchall()
                 }
                 if "channel_name" not in columns:
                     connection.execute("ALTER TABLE monitored_channels ADD COLUMN channel_name TEXT")
+                if "channel_image_url" not in columns:
+                    connection.execute("ALTER TABLE monitored_channels ADD COLUMN channel_image_url TEXT")
                 connection.commit()
 
     @staticmethod
@@ -332,6 +377,7 @@ class ChannelStore:
             channel_id=row["channel_id"],
             alias=row["alias"],
             channel_name=row["channel_name"],
+            channel_image_url=row["channel_image_url"],
             enabled=bool(row["enabled"]),
             last_live_status=row["last_live_status"],
             last_live_title=row["last_live_title"],
@@ -357,6 +403,7 @@ class ChannelStore:
             stop_reason=row["stop_reason"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            live_id=row["live_id"],
         )
 
     def list_channels(self) -> list[StoredChannel]:
@@ -364,7 +411,7 @@ class ChannelStore:
             with self._connect() as connection:
                 rows = connection.execute(
                     """
-                    SELECT channel_id, alias, channel_name, enabled, last_live_status, last_live_title,
+                    SELECT channel_id, alias, channel_name, channel_image_url, enabled, last_live_status, last_live_title,
                            last_open_date, last_close_date, last_checked_at, last_error,
                            viewer_count, created_at, updated_at
                     FROM monitored_channels
@@ -378,7 +425,7 @@ class ChannelStore:
             with self._connect() as connection:
                 row = connection.execute(
                     """
-                    SELECT channel_id, alias, channel_name, enabled, last_live_status, last_live_title,
+                    SELECT channel_id, alias, channel_name, channel_image_url, enabled, last_live_status, last_live_title,
                            last_open_date, last_close_date, last_checked_at, last_error,
                            viewer_count, created_at, updated_at
                     FROM monitored_channels
@@ -394,27 +441,30 @@ class ChannelStore:
         alias: str,
         enabled: bool,
         channel_name: str | None = None,
+        channel_image_url: str | None = None,
     ) -> StoredChannel:
         existing = self.get_channel(channel_id)
         timestamp = now_iso()
         created_at = existing.created_at if existing else timestamp
         resolved_alias = alias if alias is not None else (existing.alias if existing else "")
         resolved_channel_name = channel_name if channel_name is not None else (existing.channel_name if existing else None)
+        resolved_image_url = channel_image_url if channel_image_url is not None else (existing.channel_image_url if existing else None)
 
         with self._lock:
             with self._connect() as connection:
                 connection.execute(
                     """
                     INSERT INTO monitored_channels (
-                        channel_id, alias, channel_name, enabled, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        channel_id, alias, channel_name, channel_image_url, enabled, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(channel_id) DO UPDATE SET
                         alias = excluded.alias,
                         channel_name = excluded.channel_name,
+                        channel_image_url = excluded.channel_image_url,
                         enabled = excluded.enabled,
                         updated_at = excluded.updated_at
                     """,
-                    (channel_id, resolved_alias, resolved_channel_name, int(enabled), created_at, timestamp),
+                    (channel_id, resolved_alias, resolved_channel_name, resolved_image_url, int(enabled), created_at, timestamp),
                 )
                 connection.commit()
 
@@ -482,7 +532,7 @@ class ChannelStore:
             with self._connect() as connection:
                 row = connection.execute(
                     """
-                    SELECT id, channel_id, channel_name, started_at, ended_at, stop_reason, created_at, updated_at
+                    SELECT id, channel_id, channel_name, started_at, ended_at, stop_reason, created_at, updated_at, live_id
                     FROM monitoring_sessions
                     WHERE channel_id = ? AND ended_at IS NULL
                     ORDER BY id DESC
@@ -492,28 +542,55 @@ class ChannelStore:
                 ).fetchone()
         return self._row_to_monitoring_session(row)
 
-    def start_monitoring_session(self, channel_id: str, channel_name: str | None) -> MonitoringSession:
+    def start_monitoring_session(
+        self, channel_id: str, channel_name: str | None, live_id: int | None = None
+    ) -> MonitoringSession:
         existing = self.get_open_monitoring_session(channel_id)
         if existing is not None:
-            return existing
+            # Unknown id: keep the open session. Splitting a broadcast is worse than the rare merge of a reconnect
+            # that landed on a new broadcast exactly while live-detail was failing (logged by fetch_live_id).
+            if live_id is None or existing.live_id == live_id:
+                return existing
+            # A different broadcast, or one never identified: nothing says this reconnect continues it, so close it
+            # rather than let two broadcasts share a session.
+            self.finish_monitoring_session(
+                channel_id, STOP_REASON_BROADCAST_ENDED if existing.live_id is not None else STOP_REASON_UNKNOWN
+            )
 
         timestamp = now_iso()
         with self._lock:
             with self._connect() as connection:
-                cursor = connection.execute(
-                    """
-                    INSERT INTO monitoring_sessions (
-                        channel_id, channel_name, started_at, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (channel_id, channel_name, timestamp, timestamp, timestamp),
-                )
-                session_id = cursor.lastrowid
+                latest = connection.execute(
+                    "SELECT id, live_id FROM monitoring_sessions WHERE channel_id = ? ORDER BY id DESC LIMIT 1",
+                    (channel_id,),
+                ).fetchone()
+                if live_id is not None and latest is not None and latest["live_id"] == live_id:
+                    # Same CHZZK broadcast as the last session (a Collector restart or a reconnect): reopen it,
+                    # so one broadcast stays one session. The time it was closed shows up as a gap in its events.
+                    session_id = latest["id"]
+                    connection.execute(
+                        """
+                        UPDATE monitoring_sessions
+                        SET ended_at = NULL, stop_reason = NULL, channel_name = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (channel_name, timestamp, session_id),
+                    )
+                else:
+                    cursor = connection.execute(
+                        """
+                        INSERT INTO monitoring_sessions (
+                            channel_id, channel_name, started_at, created_at, updated_at, live_id
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (channel_id, channel_name, timestamp, timestamp, timestamp, live_id),
+                    )
+                    session_id = cursor.lastrowid
                 connection.commit()
 
                 row = connection.execute(
                     """
-                    SELECT id, channel_id, channel_name, started_at, ended_at, stop_reason, created_at, updated_at
+                    SELECT id, channel_id, channel_name, started_at, ended_at, stop_reason, created_at, updated_at, live_id
                     FROM monitoring_sessions
                     WHERE id = ?
                     """,
@@ -543,7 +620,7 @@ class ChannelStore:
 
                 row = connection.execute(
                     """
-                    SELECT id, channel_id, channel_name, started_at, ended_at, stop_reason, created_at, updated_at
+                    SELECT id, channel_id, channel_name, started_at, ended_at, stop_reason, created_at, updated_at, live_id
                     FROM monitoring_sessions
                     WHERE channel_id = ?
                     ORDER BY id DESC
@@ -559,7 +636,7 @@ class ChannelStore:
                 if channel_id is None:
                     rows = connection.execute(
                         """
-                        SELECT id, channel_id, channel_name, started_at, ended_at, stop_reason, created_at, updated_at
+                        SELECT id, channel_id, channel_name, started_at, ended_at, stop_reason, created_at, updated_at, live_id
                         FROM monitoring_sessions
                         ORDER BY id ASC
                         """
@@ -567,7 +644,7 @@ class ChannelStore:
                 else:
                     rows = connection.execute(
                         """
-                        SELECT id, channel_id, channel_name, started_at, ended_at, stop_reason, created_at, updated_at
+                        SELECT id, channel_id, channel_name, started_at, ended_at, stop_reason, created_at, updated_at, live_id
                         FROM monitoring_sessions
                         WHERE channel_id = ?
                         ORDER BY id ASC
@@ -778,6 +855,7 @@ class MonitorCoordinator:
                             channel.alias,
                             channel.enabled,
                             channel_name=metadata.channel_name,
+                            channel_image_url=metadata.channel_image_url,
                         )
                 snapshot = await self.live_status_client.fetch(channel.channel_id)
                 self._last_live_poll_at[channel.channel_id] = now_ts
@@ -827,8 +905,10 @@ class MonitorCoordinator:
 
         alias = channel.channel_name or channel.alias or f"unknown_{channel.channel_id[:6]}"
 
-        def on_connected():
-            self.store.start_monitoring_session(channel.channel_id, alias)
+        async def on_connected():
+            # Looked up on every accepted connection, not once per task: a reconnect can land on a new broadcast.
+            live_id = await self.live_status_client.fetch_live_id(channel.channel_id)
+            self.store.start_monitoring_session(channel.channel_id, alias, live_id)
 
         task = asyncio.create_task(
             self.monitor_task_factory(
@@ -957,12 +1037,18 @@ async def _resolve_control_channels(
             if metadata.valid
             else (existing.channel_name if existing is not None else None)
         )
+        resolved_image_url = (
+            metadata.channel_image_url
+            if metadata.valid
+            else (existing.channel_image_url if existing is not None else None)
+        )
 
         resolved.append(
             ResolvedControlChannel(
                 channel_id=channel_id,
                 alias=resolved_alias,
                 channel_name=resolved_channel_name,
+                channel_image_url=resolved_image_url,
                 snapshot=snapshot,
             )
         )
@@ -990,6 +1076,7 @@ async def apply_control_command(
                 item.alias,
                 True,
                 channel_name=item.channel_name,
+                channel_image_url=item.channel_image_url,
             )
             store.update_snapshot(item.channel_id, item.snapshot)
             await coordinator.reconcile_single_channel(item.channel_id, item.snapshot)

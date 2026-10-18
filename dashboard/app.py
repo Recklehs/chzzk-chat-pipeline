@@ -112,12 +112,18 @@ def empty_runs(points, threshold):
     return runs
 
 
+def profile_image(value):
+    # The URL comes from the CHZZK API through the Collector and lands in an <img src>; only plain https passes.
+    return value if isinstance(value, str) and value.startswith('https://') else None
+
+
 def live_channels(payload):
     """Collector /channels payload -> live rate rows; anything else is a ValueError the endpoint reports as offline."""
     channels = payload.get('channels') if isinstance(payload, dict) else None
     if not isinstance(channels, list) or not all(isinstance(c, dict) and c.get('channel_id') for c in channels):
         raise ValueError('Unexpected Collector /channels response')
     return [{'channel_id': c['channel_id'], 'display_name': c.get('display_name') or c['channel_id'],
+             'channel_image_url': profile_image(c.get('channel_image_url')),
              'monitoring_status': c.get('monitoring_status'), 'recent_events_per_minute': c.get('recent_events_per_minute') or 0}
             for c in channels]
 

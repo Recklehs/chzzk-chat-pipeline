@@ -230,7 +230,7 @@ quarantine 재처리 시 동일 `(원본 키, parser_version)` 오류 행을 중
 
 - 일반 채팅량: chat_messages의 유효 행 수. CBOTBLIND 포함 여부를 지표 이름과 필터로 명시한다. 후원·선물 메시지를 채팅량에 포함하는 지표가 필요하면 별도 정의한다.
 - 고유 채팅 참여자: 일반 채팅의 식별 가능한 actor_user_id만 집계. 누락·익명 건수는 따로 표시한다. 관리자 포함 전체 참여자와 common_user 역할만 센 참여자를 구분할 수 있도록 actor_user_role을 보존한다. 관리자를 자동 제외하거나 봇으로 간주하지 않는다.
-- 후원 건수/금액: donations만 사용한다. pay_type을 구분하고 단위가 확인되기 전 원화 매출로 표기하지 않는다.
+- 후원 건수/금액: donations만 사용한다. pay_type을 구분한다. Silver는 원본 pay_type을 그대로 보관하고, `CURRENCY`의 원 단위 표기는 Gold·화면 단계에서 한다(2026-10-18 운영자 확인). 다른 pay_type은 단위가 확인되기 전 원화로 표기하지 않는다.
 - 구독 관련 알림 건수: subscription_notifications를 센다. 실제 신규 가입·갱신·결제 건수로 명명하지 않는다. 다른 offset의 재전달을 구분할 거래 ID가 없으므로 구독 거래의 업무 중복 제거를 보장하지 않는다.
 - 구독 선물 수신 건수: subscription_gifts를 센다. 전체 신규 구독 또는 갱신 건수로 부르지 않는다.
 - sender_subscription_months는 해당 메시지 시점의 발신자 상태다. 이 컬럼이 있는 채팅 행 수를 구독 발생 건수로 사용하지 않는다.
