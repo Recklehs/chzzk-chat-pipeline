@@ -493,14 +493,18 @@ function renderDetail() {
 
 async function loadDetail() {
     if (selected == null) { document.getElementById('detail').innerHTML = '<div class="panel empty">회차를 고르세요</div>'; return; }
+    // Responses can arrive out of order when the selection changes quickly; only the current selection may render.
+    const requested = selected;
     let data;
-    try { data = await getJson(`/api/sessions/${selected}`); }
+    try { data = await getJson(`/api/sessions/${requested}`); }
     catch (error) {
+        if (requested !== selected) return;
         delete shown.detail;
         document.getElementById('detail').innerHTML = `<div class="panel error">${esc(error.message)}</div>`;
         return;
     }
-    if (!changed('detail', [data, selected, sessions.map(s => [s.session_id, s.chat_count])])) return;
+    if (requested !== selected) return;
+    if (!changed('detail', [data, requested, sessions.map(s => [s.session_id, s.chat_count])])) return;
     detail = data;
     renderDetail();
 }
