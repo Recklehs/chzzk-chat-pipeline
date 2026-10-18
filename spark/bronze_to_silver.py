@@ -48,7 +48,8 @@ def load_settings(argv=None):
     properties = {**runtime.spark_properties, 'spark.sql.session.timeZone': 'UTC'}
     properties.setdefault('spark.sql.shuffle.partitions', '4')
     properties.setdefault('spark.databricks.delta.snapshotPartitions', '4')
-    runtime = replace(runtime, spark_app_name='chzzk-bronze-to-silver', spark_properties=properties)
+    runtime = replace(runtime, spark_app_name='chzzk-bronze-to-silver', spark_properties=properties,
+                      processing_time=props.get('app.silver.trigger.interval', runtime.processing_time))
     return SilverSettings(str(bronze), str(output), str(checkpoint), runtime, args.available_now)
 
 
