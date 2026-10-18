@@ -53,6 +53,18 @@ def main():
             reingested=original.withColumn('ingested_at_ms',original.ingested_at_ms+1000)
             reingested.write.format('delta').mode('append').save(source_path)
             silver_store.validate_bronze_source(reingested,source_path)
+            # Offsets are per partition: the batch range spans both partitions' offsets, so a reused offset
+            # in partition 1 is still compared while an unchanged replay across partitions passes.
+            multi_path=root+'/multi-partition-bronze'
+            df([frame(offset=0),frame(offset=1),frame(offset=5,partition=1),frame(offset=6,partition=1)]).write.format('delta').save(multi_path)
+            replay=df([frame(offset=1),frame(offset=6,partition=1)])
+            replay.write.format('delta').mode('append').save(multi_path)
+            silver_store.validate_bronze_source(replay,multi_path)
+            reused=df([frame([message(msg='different')],offset=5,partition=1)])
+            reused.write.format('delta').mode('append').save(multi_path)
+            try:silver_store.validate_bronze_source(reused,multi_path)
+            except ValueError as exc:assert "('synthetic', 1, 5)" in str(exc), exc
+            else:raise AssertionError('reused offset in partition 1 was accepted')
             print('Bronze source integrity guard passed before any Silver writes.',flush=True)
             output=root+'/silver'
             first=df([frame([message(),None,message()],offset=0),

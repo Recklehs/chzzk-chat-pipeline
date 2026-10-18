@@ -144,7 +144,7 @@ Silver의 실행 진입점은 [spark/bronze_to_silver.py](../spark/bronze_to_sil
 
 출력은 `chat_messages`, `donations`, `subscription_gifts`, `subscription_notifications`, `unclassified_events`, `quarantine`이다. 분석용 네 테이블과 미분류 테이블은 공통 컬럼을 각 행에 가진다. 통합 부모 테이블이나 집계는 만들지 않는다. [데이터 계약](silver-data-contract.md)에 행의 의미·필수값·키·품질 처리 규칙을 명시한다.
 
-충돌 키를 quarantine에 먼저 저장한 뒤 관련 정상 행을 삭제하므로, 그 사이 장애가 나도 같은 배치 재시도로 제외를 완료한다. 여섯 테이블 전체의 원자적 커밋은 제공하지 않는다. Gold는 후원·선물 행의 사후 제외도 반영해야 하므로 매번 전부 다시 계산한다.
+충돌 키를 quarantine에 먼저 저장한 뒤 관련 정상 행을 삭제하므로, 그 사이 장애가 나도 같은 배치 재시도로 제외를 완료한다. 여섯 테이블 전체의 원자적 커밋은 제공하지 않는다. Gold 스트림은 이 삭제 커밋을 `skipChangeCommits`로 건너뛴다. 진행 중인 회차는 트리거마다 다시 계산되어 반영되지만, 끝난 회차는 `--full`을 실행해야 반영된다. Silver 로그의 `removed`가 0보다 크면 `--full`을 실행한다.
 
 현재 Silver는 macOS/Linux 로컬 파일시스템의 단일 writer만 지원한다. 파싱·중복 판정은 드라이버에서 10,000항목씩 수행하고 Spark는 Delta 읽기·쓰기를 담당한다. 처리량이 커지면 executor 파싱·조인으로 확장한다. 계약 변경 시 새 출력과 체크포인트에서 Bronze를 다시 정제한다.
 
