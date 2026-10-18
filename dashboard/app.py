@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import threading
 import urllib.request
 
 from fastapi import FastAPI, HTTPException, Request
@@ -123,6 +124,7 @@ def create_app(gold_path=None, collector_url=None, refresh_seconds=None, live=fe
     refresh_seconds = refresh_seconds or int(os.environ.get('GOLD_DASHBOARD_REFRESH_SECONDS', '10'))
     app = FastAPI(title='CHZZK Broadcast Analytics')
     listing = {}  # the last /api/sessions body and the Gold versions it was built from, shared by every open tab
+    listing_lock = threading.Lock()  # sync endpoints run in a thread pool; one rebuild at a time keeps the cache whole
 
     def computed_at(manifest):
         value = manifest.get('computed_at')
@@ -135,17 +137,21 @@ def create_app(gold_path=None, collector_url=None, refresh_seconds=None, live=fe
 
     @app.get('/api/sessions')
     def sessions():
-        manifest = read_manifest(gold_path)
-        tables = open_table(gold_path, 'broadcast_sessions'), open_table(gold_path, 'channel_minute_activity')
-        # Gold rewrites rows every trigger; between writes every poll gets the cached body.
-        key = (tables[0].version(), tables[1].version(), manifest.get('computed_at'))
-        if listing.get('key') != key:
-            rows = sorted(tables[0].to_pyarrow_dataset().to_table().to_pylist(), key=lambda r: r['started_at'], reverse=True)
-            trends = sparklines(tables[1], rows, computed_at(manifest))
-            listing.update(key=key, body={
-                'computed_at': manifest.get('computed_at'), 'mode': manifest.get('mode'), 'gap_minutes': manifest.get('gap_minutes'),
-                'sessions': [{**jsonable(r), 'sparkline': trends[r['session_id']]} for r in rows]})
-        return listing['body']
+        # Versions are read under the lock, so a slow request for an older Gold version cannot overwrite a newer cache.
+        with listing_lock:
+            manifest = read_manifest(gold_path)
+            tables = open_table(gold_path, 'broadcast_sessions'), open_table(gold_path, 'channel_minute_activity')
+            end = computed_at(manifest)
+            # Gold rewrites rows every trigger; between writes every poll gets the cached body. Without a manifest the
+            # end is "now", which keeps ongoing sessions moving instead of freezing the cache.
+            key = (tables[0].version(), tables[1].version(), end.isoformat())
+            if listing.get('key') != key:
+                rows = sorted(tables[0].to_pyarrow_dataset().to_table().to_pylist(), key=lambda r: r['started_at'], reverse=True)
+                trends = sparklines(tables[1], rows, end)
+                body = {'computed_at': manifest.get('computed_at'), 'mode': manifest.get('mode'), 'gap_minutes': manifest.get('gap_minutes'),
+                        'sessions': [{**jsonable(r), 'sparkline': trends[r['session_id']]} for r in rows]}
+                listing.update(key=key, body=body)
+            return listing['body']
 
     @app.get('/api/sessions/{session_id}')
     def session_detail(session_id: int):

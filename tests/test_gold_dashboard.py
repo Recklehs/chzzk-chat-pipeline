@@ -1,4 +1,5 @@
 """Gold dashboard API over small Delta tables written without Spark."""
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 import json
 
@@ -114,3 +115,11 @@ def test_session_list_is_cached_until_gold_changes(tmp_path):
 def test_page_renders_refresh_interval_and_collector_link(tmp_path):
     html = client(gold(tmp_path)).get('/').text
     assert 'const REFRESH_MS = 7 * 1000' in html and 'href="http://collector:8000/dashboard"' in html
+
+
+def test_concurrent_first_polls_share_one_complete_listing(tmp_path):
+    app = client(gold(tmp_path))
+    with ThreadPoolExecutor(8) as pool:
+        responses = list(pool.map(lambda _: app.get('/api/sessions'), range(16)))
+    assert {r.status_code for r in responses} == {200}
+    assert len({json.dumps(r.json(), sort_keys=True) for r in responses}) == 1
