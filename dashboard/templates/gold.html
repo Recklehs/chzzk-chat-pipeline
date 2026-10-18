@@ -533,8 +533,10 @@ function renderBroadcast() {
     const c = { id: s.channel_id, name: s.channel_name || s.channel_id, live: isLive(s) };
     const others = sessions.filter(x => x.channel_id === s.channel_id).slice(0, 8);
     const perChatter = s.unique_chatters ? s.chat_count / s.unique_chatters : null;
-    const slots = detail.minutes.length;  // the calendar minutes the chart covers, same range as active_minutes
-    const coverage = slots ? Math.min(100, s.active_minutes / slots * 100) : null;
+    const slots = detail.minutes.length;  // the calendar minutes the chart covers
+    // Counted from chat minutes here: Gold's active_minutes also counts minutes with only donations or subscriptions.
+    const chatMinutes = detail.minutes.filter(p => p.chat_count > 0).length;
+    const coverage = slots ? chatMinutes / slots * 100 : null;
     const note = isLive(s) ? '' : s.data_status === 'NO_DATA'
         ? '이 방송은 수집된 채팅이 없어요. 수집이 멈춰 있던 시간으로 보여요.'
         : s.data_status === 'CHECK_GAP' ? `중간에 채팅이 ${num(detail.gap_minutes)}분 넘게 기록되지 않은 구간이 있어요(가장 길게 ${num(s.max_gap_minutes, 0)}분). 방송이 조용했거나 수집이 잠시 끊겼을 수 있어요. 차트의 붉은 띠가 그 구간이에요.` : '';
@@ -569,7 +571,7 @@ function renderBroadcast() {
             <div class="panel stat-card"><span class="label">분당 채팅</span><span class="value num">${num(s.chats_per_minute, 1)}</span><span class="sub">방송 전체 평균</span></div>
             <div class="panel stat-card"><span class="label">가장 붐빈 순간</span><span class="value num">${s.peak_minute_start ? time(s.peak_minute_start) : '–'}</span><span class="sub">${s.peak_minute_chat_count ? `1분에 ${num(s.peak_minute_chat_count)}건` : '채팅 없음'}</span></div>
             <div class="panel stat-card"><span class="label">1인당 채팅</span><span class="value num">${num(perChatter, 1)}</span><span class="sub">채팅 ÷ 채팅한 사람</span></div>
-            <div class="panel stat-card"><span class="label">채팅이 있던 시간</span><span class="value num">${coverage == null ? '–' : `${num(coverage)}%`}</span><span class="sub">${num(s.active_minutes)}분 / ${num(slots)}분</span></div>
+            <div class="panel stat-card"><span class="label">채팅이 있던 시간</span><span class="value num">${coverage == null ? '–' : `${num(coverage)}%`}</span><span class="sub">${num(chatMinutes)}분 / ${num(slots)}분</span></div>
         </section>
         <section class="lower">
             <div class="panel"><div class="card-title">${hourlyTitle(m)}<span>한국 시간</span></div><div class="small-chart"><canvas id="hourly-chart" aria-label="${hourlyTitle(m)}"></canvas></div></div>

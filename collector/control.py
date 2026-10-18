@@ -551,9 +551,11 @@ class ChannelStore:
             # that landed on a new broadcast exactly while live-detail was failing (logged by fetch_live_id).
             if live_id is None or existing.live_id == live_id:
                 return existing
-            if existing.live_id is not None:
-                # The reconnect landed on a new broadcast: the open session belongs to the one that ended.
-                self.finish_monitoring_session(channel_id, STOP_REASON_BROADCAST_ENDED)
+            # A different broadcast, or one never identified: nothing says this reconnect continues it, so close it
+            # rather than let two broadcasts share a session.
+            self.finish_monitoring_session(
+                channel_id, STOP_REASON_BROADCAST_ENDED if existing.live_id is not None else STOP_REASON_UNKNOWN
+            )
 
         timestamp = now_iso()
         with self._lock:
@@ -562,14 +564,7 @@ class ChannelStore:
                     "SELECT id, live_id FROM monitoring_sessions WHERE channel_id = ? ORDER BY id DESC LIMIT 1",
                     (channel_id,),
                 ).fetchone()
-                if existing is not None and existing.live_id is None:
-                    # Opened before its id was known: tag it rather than start a second session.
-                    session_id = existing.id
-                    connection.execute(
-                        "UPDATE monitoring_sessions SET live_id = ?, updated_at = ? WHERE id = ?",
-                        (live_id, timestamp, session_id),
-                    )
-                elif live_id is not None and latest is not None and latest["live_id"] == live_id:
+                if live_id is not None and latest is not None and latest["live_id"] == live_id:
                     # Same CHZZK broadcast as the last session (a Collector restart or a reconnect): reopen it,
                     # so one broadcast stays one session. The time it was closed shows up as a gap in its events.
                     session_id = latest["id"]

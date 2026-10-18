@@ -449,13 +449,14 @@ def test_same_broadcast_reopens_its_session(tmp_path):
     assert store.start_monitoring_session("channel-1", "streamer").id != unknown.id
     assert len(store.list_monitoring_sessions()) == 4
 
-    # Still open: an id arriving later tags it, and a reconnect onto a new broadcast closes it and opens another.
-    tagged = store.start_monitoring_session("channel-1", "streamer", live_id=333)
-    assert len(store.list_monitoring_sessions()) == 4 and tagged.live_id == 333
+    # Still open without an id: a reconnect that does get one cannot prove it is the same broadcast, so it closes.
+    known = store.start_monitoring_session("channel-1", "streamer", live_id=333)
+    assert known.live_id == 333 and store.list_monitoring_sessions()[-2].stop_reason == "UNKNOWN"
     # A failed lookup on a later reconnect keeps the open session rather than split the broadcast.
-    assert store.start_monitoring_session("channel-1", "streamer").id == tagged.id
+    assert store.start_monitoring_session("channel-1", "streamer").id == known.id
+    # A reconnect onto a new broadcast closes the open one and opens another.
     moved = store.start_monitoring_session("channel-1", "streamer", live_id=444)
-    assert moved.id != tagged.id and moved.live_id == 444
+    assert moved.id != known.id and moved.live_id == 444
     assert store.list_monitoring_sessions()[-2].stop_reason == "BROADCAST_ENDED"
 
 
