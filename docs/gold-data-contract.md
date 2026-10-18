@@ -44,7 +44,7 @@ flowchart LR
 | `subscription_notification_count` | BIGINT | subscription_notifications 행 수 |
 | `subscription_gift_count` | BIGINT | subscription_gifts 행 수 |
 
-키는 `(channel_id, minute_start, session_id)`다. 한 회차가 끝난 같은 분에 다음 회차가 시작하면 그 분은 회차별로 두 행이 된다. Collector 재시작은 같은 방송(`live_id`)이면 직전 회차를 다시 열므로 회차를 나누지 않는다. 다시 열린 회차는 꺼져 있던 시간만큼 이벤트가 비며, 10분 이상이면 공백으로 표시된다. 분 단위 고유 참여자는 회차 고유 참여자를 만들 때 합산하지 않는다.
+키는 `(channel_id, minute_start, session_id)`다. 한 회차가 끝난 같은 분에 다음 회차가 시작하면 그 분은 회차별로 두 행이 된다. Collector 재시작은 같은 방송(`live_id`)이면 직전 회차를 다시 열므로 회차를 나누지 않는다. 다시 열린 회차는 꺼져 있던 시간만큼 이벤트가 비며, 10분 이상이면 공백으로 표시된다. 다시 열린 회차는 `ended_at`이 비므로 Gold가 진행 중 회차로 다시 계산하고, 이미 끝난 방송으로 확정한 행도 그때 교체된다. 다시 여는 것은 채널의 가장 최근 회차뿐이라 회차끼리 겹치지 않는다. `live-detail` 조회가 실패하면 열린 회차는 유지하고, 닫힌 회차는 다시 열지 않는다. 분 단위 고유 참여자는 회차 고유 참여자를 만들 때 합산하지 않는다.
 
 ## 3. `gold.broadcast_sessions`
 

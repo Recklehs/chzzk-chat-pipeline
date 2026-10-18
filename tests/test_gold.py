@@ -78,6 +78,10 @@ def test_refresh_targets_ongoing_new_and_changed_sessions_only():
     # 6 a corrected channel.
     assert changed_sessions(sessions, stored) == {2, 3, 4, 5, 6}
 
+    # The Collector reopens a closed session when the same broadcast reconnects: Gold stored an end, the record has
+    # none now, so the session is rewritten as live again rather than kept as a finished broadcast.
+    assert changed_sessions([session(1, None)], stored) == {1}
+
 
 def test_rewritten_sessions_also_rewrite_session_less_rows_their_boundaries_moved():
     minute = 60_000_000

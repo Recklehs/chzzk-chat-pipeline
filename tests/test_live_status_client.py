@@ -182,16 +182,19 @@ def test_live_status_client_maps_metadata_request_error_to_invalid(monkeypatch):
 
 def test_live_status_client_reads_live_id(monkeypatch):
     payloads = {
-        "channel-open": {"code": 200, "content": {"liveId": 21712172}},
-        "channel-closed": {"code": 200, "content": None},
-        "channel-odd": ["not", "a", "dict"],
+        "channel-open": [{"code": 200, "content": {"liveId": 21712172}}],
+        "channel-flaky": [{"code": 500, "message": "busy"}, {"code": 200, "content": {"liveId": 7}}],
+        "channel-closed": [{"code": 200, "content": None}] * 2,
+        "channel-odd": [["not", "a", "dict"]] * 2,
     }
 
     def fake_get(url, timeout, headers=None):
         channel_id = url.split("/channels/")[1].split("/")[0]
         assert url == f"https://example.com/service/v3/channels/{channel_id}/live-detail"
-        return DummyResponse(payloads[channel_id])
+        return DummyResponse(payloads[channel_id].pop(0))
 
     monkeypatch.setattr(requests, "get", fake_get)
     client = LiveStatusClient(base_url="https://example.com", timeout_seconds=7)
-    assert [asyncio.run(client.fetch_live_id(c)) for c in payloads] == [21712172, None, None]
+    found = [asyncio.run(client.fetch_live_id(c, retry_seconds=0)) for c in list(payloads)]
+    assert found == [21712172, 7, None, None]
+    assert all(not left for left in payloads.values())  # one retry each, no more

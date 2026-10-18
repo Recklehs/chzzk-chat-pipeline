@@ -230,22 +230,37 @@ class LiveStatusClient:
             checked_at=now_iso(),
         )
 
-    async def fetch_live_id(self, channel_id: str) -> int | None:
-        """CHZZK's id for the current broadcast; live-status leaves liveId empty, live-detail fills it. None if unknown."""
+    async def fetch_live_id(self, channel_id: str, attempts: int = 2, retry_seconds: float = 0.5) -> int | None:
+        """CHZZK's id for the current broadcast; live-status leaves liveId empty, live-detail fills it. None if unknown.
+
+        Runs inside the connection callback, so the receive loop waits for it (the ping task keeps the socket alive);
+        attempts x timeout bounds that wait. One retry covers a transient 5xx or timeout, which would otherwise split
+        a broadcast into two sessions on the next restart.
+        """
         url = f"{self.base_url}/service/v3/channels/{channel_id}/live-detail"
-        try:
-            response = await asyncio.to_thread(
-                requests.get, url, timeout=self.timeout_seconds, headers={"User-Agent": "Mozilla/5.0"}
-            )
-            live_id = (response.json().get("content") or {}).get("liveId")
-        except Exception as exc:
-            # Without an id the session cannot be matched to the last one, so a restart would split the broadcast.
-            print(f"[WARN] live-detail lookup failed for {channel_id}; opening a new session: {exc}")
-            return None
-        if not isinstance(live_id, int) or isinstance(live_id, bool):
-            print(f"[WARN] live-detail has no liveId for {channel_id}; opening a new session")
-            return None
-        return live_id
+        problem = None
+        for attempt in range(attempts):
+            if attempt:
+                await asyncio.sleep(retry_seconds)
+            try:
+                response = await asyncio.to_thread(
+                    requests.get, url, timeout=self.timeout_seconds, headers={"User-Agent": "Mozilla/5.0"}
+                )
+                payload = response.json()
+                if payload.get("code") != 200:
+                    problem = f"code={payload.get('code')}"
+                    continue
+                live_id = (payload.get("content") or {}).get("liveId")
+            except Exception as exc:
+                problem = str(exc)
+                continue
+            if isinstance(live_id, int) and not isinstance(live_id, bool):
+                return live_id
+            problem = "no liveId in response"
+        # Without an id the session cannot be matched to the last one, so a restart would split the broadcast.
+        print(f"[WARN] live-detail lookup failed for {channel_id} after {attempts} attempts ({problem}); "
+              f"session is not matched by broadcast")
+        return None
 
     async def fetch_channel_metadata(self, channel_id: str) -> ChannelMetadata:
         url = f"{self.base_url}/service/v1/channels/{channel_id}"
@@ -532,6 +547,8 @@ class ChannelStore:
     ) -> MonitoringSession:
         existing = self.get_open_monitoring_session(channel_id)
         if existing is not None:
+            # Unknown id: keep the open session. Splitting a broadcast is worse than the rare merge of a reconnect
+            # that landed on a new broadcast exactly while live-detail was failing (logged by fetch_live_id).
             if live_id is None or existing.live_id == live_id:
                 return existing
             if existing.live_id is not None:
