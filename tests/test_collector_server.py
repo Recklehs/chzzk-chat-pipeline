@@ -204,8 +204,9 @@ def test_receive_messages_stops_when_kafka_publish_fails():
     assert stats["per_channel"] == {}
 
 
+@pytest.mark.parametrize("async_callback", [False, True])
 @pytest.mark.parametrize("ret_code", [0, 403, None])
-def test_connection_ack_records_sqlite_session_without_publishing(tmp_path, ret_code):
+def test_connection_ack_records_sqlite_session_without_publishing(tmp_path, ret_code, async_callback):
     collector = load_collector_module()
     store = collector.ChannelStore(str(tmp_path / "control.db"))
     counter = collector.CmdCounter()
@@ -215,8 +216,13 @@ def test_connection_ack_records_sqlite_session_without_publishing(tmp_path, ret_
     chat = make_single_message("hello")
     websocket = FakeWebSocket([json.dumps(ack), json.dumps(ack), json.dumps(chat)])
 
-    def on_connected():
+    def record():
         store.start_monitoring_session("channel-1", "streamer")
+
+    async def record_async():
+        record()
+
+    on_connected = record_async if async_callback else record
 
     receive = collector.receive_messages(
         websocket, "channel-1", "streamer", counter, last_chat_time, publisher,

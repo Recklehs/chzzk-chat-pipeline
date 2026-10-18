@@ -238,9 +238,14 @@ class LiveStatusClient:
                 requests.get, url, timeout=self.timeout_seconds, headers={"User-Agent": "Mozilla/5.0"}
             )
             live_id = (response.json().get("content") or {}).get("liveId")
-        except Exception:
+        except Exception as exc:
+            # Without an id the session cannot be matched to the last one, so a restart would split the broadcast.
+            print(f"[WARN] live-detail lookup failed for {channel_id}; opening a new session: {exc}")
             return None
-        return live_id if isinstance(live_id, int) and not isinstance(live_id, bool) else None
+        if not isinstance(live_id, int) or isinstance(live_id, bool):
+            print(f"[WARN] live-detail has no liveId for {channel_id}; opening a new session")
+            return None
+        return live_id
 
     async def fetch_channel_metadata(self, channel_id: str) -> ChannelMetadata:
         url = f"{self.base_url}/service/v1/channels/{channel_id}"
@@ -527,7 +532,11 @@ class ChannelStore:
     ) -> MonitoringSession:
         existing = self.get_open_monitoring_session(channel_id)
         if existing is not None:
-            return existing
+            if live_id is None or existing.live_id == live_id:
+                return existing
+            if existing.live_id is not None:
+                # The reconnect landed on a new broadcast: the open session belongs to the one that ended.
+                self.finish_monitoring_session(channel_id, STOP_REASON_BROADCAST_ENDED)
 
         timestamp = now_iso()
         with self._lock:
@@ -536,13 +545,24 @@ class ChannelStore:
                     "SELECT id, live_id FROM monitoring_sessions WHERE channel_id = ? ORDER BY id DESC LIMIT 1",
                     (channel_id,),
                 ).fetchone()
-                if live_id is not None and latest is not None and latest["live_id"] == live_id:
+                if existing is not None and existing.live_id is None:
+                    # Opened before its id was known: tag it rather than start a second session.
+                    session_id = existing.id
+                    connection.execute(
+                        "UPDATE monitoring_sessions SET live_id = ?, updated_at = ? WHERE id = ?",
+                        (live_id, timestamp, session_id),
+                    )
+                elif live_id is not None and latest is not None and latest["live_id"] == live_id:
                     # Same CHZZK broadcast as the last session (a Collector restart or a reconnect): reopen it,
                     # so one broadcast stays one session. The time it was closed shows up as a gap in its events.
                     session_id = latest["id"]
                     connection.execute(
-                        "UPDATE monitoring_sessions SET ended_at = NULL, stop_reason = NULL, updated_at = ? WHERE id = ?",
-                        (timestamp, session_id),
+                        """
+                        UPDATE monitoring_sessions
+                        SET ended_at = NULL, stop_reason = NULL, channel_name = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (channel_name, timestamp, session_id),
                     )
                 else:
                     cursor = connection.execute(
@@ -872,9 +892,10 @@ class MonitorCoordinator:
             return
 
         alias = channel.channel_name or channel.alias or f"unknown_{channel.channel_id[:6]}"
-        live_id = await self.live_status_client.fetch_live_id(channel.channel_id)
 
-        def on_connected():
+        async def on_connected():
+            # Looked up on every accepted connection, not once per task: a reconnect can land on a new broadcast.
+            live_id = await self.live_status_client.fetch_live_id(channel.channel_id)
             self.store.start_monitoring_session(channel.channel_id, alias, live_id)
 
         task = asyncio.create_task(

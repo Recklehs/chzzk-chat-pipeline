@@ -562,7 +562,7 @@ function renderBroadcast() {
             <div class="chart-wrap"><div class="chart-box"><canvas id="main-chart" aria-label="분 단위 ${m.label}"></canvas></div></div>
             <div class="chart-foot">
                 <span><i class="swatch" style="background:var(${m.color})"></i>분 단위 ${m.label}${metric === 'chatters' ? ' (그 1분 동안 채팅한 사람)' : ''}</span>
-                ${detail.gaps.length ? `<span><i class="swatch" style="background:var(--gap);border:1px solid var(--danger)"></i>채팅이 ${num(detail.gap_minutes)}분 넘게 없던 구간 ${num(detail.gaps.length)}개</span>` : ''}
+                ${detail.gaps.length ? `<span><i class="swatch" style="background:var(--gap);border:1px solid var(--danger)"></i>채팅·후원·구독이 모두 ${num(detail.gap_minutes)}분 넘게 없던 구간 ${num(detail.gaps.length)}개</span>` : ''}
             </div>
         </section>
         <section class="stats">

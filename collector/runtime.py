@@ -1,8 +1,9 @@
 import asyncio
+import inspect
 import json
 import time
 from datetime import datetime
-from typing import Callable
+from typing import Awaitable, Callable
 
 import requests
 import websockets
@@ -178,7 +179,7 @@ async def receive_messages(
     counter: CmdCounter,
     last_chat_time: dict,
     raw_publisher=None,
-    on_connected: Callable[[], None] | None = None,
+    on_connected: Callable[[], None | Awaitable[None]] | None = None,
 ):
     """연결 응답은 로컬에서 처리하고, 나머지는 Kafka 발행 후 통계에 반영합니다."""
     if raw_publisher is None:
@@ -205,7 +206,9 @@ async def receive_messages(
                 if data.get("retCode") != 0:
                     raise RuntimeError(f"CHZZK connection rejected: retCode={data.get('retCode')}")
                 if on_connected is not None:
-                    on_connected()
+                    result = on_connected()
+                    if inspect.isawaitable(result):
+                        await result
                 continue
 
             metrics.increment("chzzk_raw_publish_attempts_total", backend=backend)
@@ -251,7 +254,7 @@ async def connect_to_chzzk(
     counter,
     live_status_client: LiveStatusClient | None = None,
     raw_publisher=None,
-    on_connected: Callable[[], None] | None = None,
+    on_connected: Callable[[], None | Awaitable[None]] | None = None,
 ):
     """
     단일 채널에 대한 WebSocket 연결 및 자동 재연결을 관리합니다.
