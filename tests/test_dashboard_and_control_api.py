@@ -227,6 +227,7 @@ def test_channel_registration_toggle_and_dashboard_state(tmp_path):
         dashboard_response = client.get("/dashboard")
         assert dashboard_response.status_code == 200
         assert 'id="channel-form"' in dashboard_response.text
+        assert 'href="http://127.0.0.1:8001"' in dashboard_response.text
         assert "set-cookie" not in dashboard_response.headers
 
         state_response = client.get("/dashboard/api/state")
