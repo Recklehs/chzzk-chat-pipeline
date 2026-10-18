@@ -69,7 +69,7 @@ Kafka 계약:
 - Key: `channel_id`
 - Value: compact JSON UTF-8 bytes
 - Payload: CHZZK WebSocket raw frame 전체
-- 연결 응답(`cmd=10100`)은 발행 대상에서 제외합니다. 성공 응답(`retCode=0`)을 받으면 SQLite `monitoring_sessions.started_at`에 모니터링 시작 시각을 기록합니다. 같은 모니터링 세션의 재연결은 시작 시각을 덮어쓰지 않습니다.
+- 연결 응답(`cmd=10100`)은 발행 대상에서 제외합니다. 성공 응답(`retCode=0`)을 받으면 SQLite `monitoring_sessions.started_at`에 모니터링 시작 시각을 기록합니다. 같은 모니터링 세션의 재연결은 시작 시각을 덮어쓰지 않습니다. 세션을 열 때 CHZZK `live-detail`의 방송 ID(`liveId`)를 `monitoring_sessions.live_id`에 함께 저장합니다. Collector를 재시작해도 직전 세션과 `liveId`가 같으면 새 세션을 만들지 않고 그 세션을 다시 열어, 방송 하나가 세션 하나로 유지됩니다. `liveId`를 받지 못하면 새 세션을 엽니다.
 
 ## Spark 동작
 

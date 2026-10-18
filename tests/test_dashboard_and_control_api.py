@@ -37,6 +37,9 @@ class FakeLiveStatusClient:
             return result()
         return result
 
+    async def fetch_live_id(self, channel_id):
+        return None
+
 
 class FakeMonitorTaskFactory:
     def __init__(self):
@@ -424,6 +427,25 @@ def test_live_status_not_found_closes_monitoring_session_with_unknown(tmp_path):
         assert sessions[0]["stop_reason"] == "UNKNOWN"
 
     asyncio.run(scenario())
+
+
+def test_same_broadcast_reopens_its_session(tmp_path):
+    collector = load_collector_module()
+    store = collector.ChannelStore(str(tmp_path / "control.db"))
+    first = store.start_monitoring_session("channel-1", "streamer", live_id=111)
+    store.finish_monitoring_session("channel-1", "SERVER_SHUTDOWN")
+
+    again = store.start_monitoring_session("channel-1", "streamer", live_id=111)
+    assert (again.id, again.ended_at, again.stop_reason, again.started_at) == (first.id, None, None, first.started_at)
+
+    store.finish_monitoring_session("channel-1", "BROADCAST_ENDED")
+    assert store.start_monitoring_session("channel-1", "streamer", live_id=222).id != first.id
+    store.finish_monitoring_session("channel-1", "BROADCAST_ENDED")
+    # An unknown id never matches, not even another unknown one.
+    unknown = store.start_monitoring_session("channel-1", "streamer")
+    store.finish_monitoring_session("channel-1", "SERVER_SHUTDOWN")
+    assert store.start_monitoring_session("channel-1", "streamer").id != unknown.id
+    assert len(store.list_monitoring_sessions()) == 4
 
 
 def test_app_shutdown_closes_monitoring_sessions_with_server_shutdown(tmp_path):
