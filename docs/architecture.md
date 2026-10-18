@@ -19,12 +19,14 @@ flowchart TB
             VOL[("kafka-data 볼륨<br/>Kafka 메시지 로그")]
             UI["Kafka UI<br/>HTTP :18080"]
         end
-        SP["Spark · Python + JVM 프로세스<br/>Structured Streaming · local[*]<br/>기본 30초 처리 주기"]
+        SP["Spark · Python + JVM 프로세스<br/>Structured Streaming · local[*]<br/>로컬 5초 처리 주기"]
         BR[("Bronze Delta<br/>data/output/local/frames/bronze")]
         CP[("Checkpoint<br/>data/output/local/frames/checkpoint")]
         SS["Silver Spark · 별도 프로세스<br/>본문 펼치기 · 정제 · 검증 · 중복 처리"]
         SL[("Silver Delta · 6개 테이블<br/>data/output/local/frames/silver")]
         SC[("Silver checkpoint<br/>data/output/local/frames/silver_checkpoint")]
+        GS["Gold Spark · 별도 프로세스<br/>바뀐 방송 회차만 다시 계산"]
+        GL[("Gold Delta · 2개 테이블<br/>data/output/local/frames/gold")]
     end
 
     USER -->|"채널 등록 · 제어 · 상태 조회"| COL
@@ -38,6 +40,9 @@ flowchart TB
     BR --> SS
     SS --> SL
     SS <--> SC
+    SL -->|"스트리밍 읽기"| GS
+    SQL -->|"방송 회차"| GS
+    GS --> GL
     USER -.-> UI
     UI -. "Docker 내부 kafka:29092" .-> K
     REDIS[("Redis · 선택 구성<br/>대시보드 상태 캐시 / TTL 10초")]
@@ -109,7 +114,7 @@ flowchart TB
     subgraph JOB["spark/kafka_raw_to_bronze.py"]
         SESSION["create_spark_session<br/>Spark + Delta + Kafka 커넥터"]
         SOURCE["create_stage_df<br/>Kafka readStream<br/>key · value · topic · partition · offset"]
-        QUERY["create_streaming_query<br/>Delta writeStream · 기본 30초"]
+        QUERY["create_streaming_query<br/>Delta writeStream · 로컬 5초"]
         FRAMES["spark/job.py · transform_raw_messages<br/>원문 보존 · cmd 및 수집 메타데이터 추출"]
     end
 
@@ -137,9 +142,9 @@ Silver의 실행 진입점은 [spark/bronze_to_silver.py](../spark/bronze_to_sil
 | [spark/silver_parser.py](../spark/silver_parser.py) | 원본 배열 인덱스 유지, 엄격한 필드 검증, 유형 분류, 익명·프로필 처리, UTC/KST 시간 변환 |
 | [spark/silver_store.py](../spark/silver_store.py) | 명시적 스키마, 원본·업무 키 비교, 충돌 격리와 기존 정상 행 제외, 멱등 MERGE |
 
-출력은 `chat_messages`, `donations`, `subscription_gifts`, `subscription_notifications`, `unclassified_events`, `quarantine`이다. 분석용 네 테이블과 미분류 테이블은 공통 컬럼을 각 행에 가진다. 통합 부모 테이블이나 Gold 집계는 만들지 않는다. [데이터 계약](silver-data-contract.md)에 행의 의미·필수값·키·품질 처리 규칙을 명시한다.
+출력은 `chat_messages`, `donations`, `subscription_gifts`, `subscription_notifications`, `unclassified_events`, `quarantine`이다. 분석용 네 테이블과 미분류 테이블은 공통 컬럼을 각 행에 가진다. 통합 부모 테이블이나 집계는 만들지 않는다. [데이터 계약](silver-data-contract.md)에 행의 의미·필수값·키·품질 처리 규칙을 명시한다.
 
-충돌 키를 quarantine에 먼저 저장한 뒤 관련 정상 행을 삭제하므로, 그 사이 장애가 나도 같은 배치 재시도로 제외를 완료한다. 여섯 테이블 전체의 원자적 커밋은 제공하지 않는다. Gold는 후원·선물 행의 사후 제외도 반영해야 한다.
+충돌 키를 quarantine에 먼저 저장한 뒤 관련 정상 행을 삭제하므로, 그 사이 장애가 나도 같은 배치 재시도로 제외를 완료한다. 여섯 테이블 전체의 원자적 커밋은 제공하지 않는다. Gold는 후원·선물 행의 사후 제외도 반영해야 하므로 매번 전부 다시 계산한다.
 
 현재 Silver는 macOS/Linux 로컬 파일시스템의 단일 writer만 지원한다. 파싱·중복 판정은 드라이버에서 10,000항목씩 수행하고 Spark는 Delta 읽기·쓰기를 담당한다. 처리량이 커지면 executor 파싱·조인으로 확장한다. 계약 변경 시 새 출력과 체크포인트에서 Bronze를 다시 정제한다.
 
@@ -155,6 +160,8 @@ Silver의 실행 진입점은 [spark/bronze_to_silver.py](../spark/bronze_to_sil
 | 선택·이전 경로 | Pub/Sub publisher/bootstrap/watcher, GCS용 dev/prod properties | 코드에 남아 있으나 현재 Kafka+로컬 기본 흐름에서는 사용하지 않음 |
 | 호환 진입점 | `chzzk_control.py`, `kafka_raw_publisher.py` | collector 모듈을 재노출하는 얇은 파일 |
 
-현재 기본 파이프라인은 프레임 단위 Bronze와 이벤트 단위 Silver까지 지원한다. Gold 집계, 감정·키워드 분석, Spark 결과 조회 API는 아직 연결되어 있지 않다.
+Gold의 실행 진입점은 [spark/silver_to_gold.py](../spark/silver_to_gold.py)다. Silver 분석용 네 테이블을 하나의 스트림으로 읽고, 트리거마다 새 이벤트가 속한 회차와 진행 중이거나 Collector 기록이 바뀐 회차만 다시 집계해 `channel_minute_activity`(채널 × 1분)와 `broadcast_sessions`(방송 회차 1건)의 해당 행을 `replaceWhere`로 교체한다. 새 이벤트가 없어도 드라이버 타이머가 같은 간격으로 회차 종료와 수집 공백을 반영한다. `--full`은 Silver 버전을 고정해 전체를 다시 계산한다. 방송 날짜는 회차 시작 시각의 KST 날짜다. 상세 규칙은 [Gold 계약](gold-data-contract.md), 방식을 고른 근거는 [결정 기록](decisions/2026-10-18-gold-live-refresh.md)에 있다.
+
+현재 기본 파이프라인은 프레임 단위 Bronze, 이벤트 단위 Silver, 방송 지표 Gold까지 지원한다. Gold를 보여주는 대시보드, 감정·키워드 분석은 아직 연결되어 있지 않다.
 
 실행 순서는 [README의 빠른 시작](../README.md#빠른-시작)을 참고한다.

@@ -1,12 +1,12 @@
-# CHZZK Collector + Spark Bronze / Silver Pipeline
+# CHZZK Collector + Spark Bronze / Silver / Gold Pipeline
 
-치지직(CHZZK) 방송 채널의 채팅 WebSocket 이벤트를 수집하는 `collector`와, 원본을 보존하는 Spark Bronze 및 이벤트를 정제하는 Spark Silver 작업을 분리해서 관리합니다.
+치지직(CHZZK) 방송 채널의 채팅 WebSocket 이벤트를 수집하는 `collector`와, 원본을 보존하는 Spark Bronze, 이벤트를 정제하는 Spark Silver, 방송별 지표를 집계하는 Spark Gold 작업을 분리해서 관리합니다.
 
 현재 구조의 핵심은 다음과 같습니다.
 
 - `collector` 는 채널 모니터링, CHZZK 메시지 수집, raw 이벤트 발행과 HTTP 기반 채널 제어에만 집중합니다.
-- 기본 경로는 **Collector → Kafka → Bronze Delta → Silver Delta**입니다. GCS 버킷이나 Google 인증 없이 실행합니다.
-- Bronze와 Silver는 각각 별도 `spark-submit` 프로세스와 체크포인트를 사용합니다.
+- 기본 경로는 **Collector → Kafka → Bronze Delta → Silver Delta → Gold Delta**입니다. GCS 버킷이나 Google 인증 없이 실행합니다.
+- Bronze, Silver, Gold는 각각 별도 `spark-submit` 스트리밍 프로세스와 체크포인트를 사용합니다. Gold는 트리거마다 바뀐 방송 회차만 다시 계산합니다.
 
 ## 프로젝트 구조
 
@@ -30,6 +30,7 @@
 │   ├── bronze_to_silver.py
 │   ├── silver_parser.py
 │   ├── silver_store.py
+│   ├── silver_to_gold.py
 │   ├── submit.ps1
 │   └── conf/
 │       ├── local.properties
@@ -102,7 +103,7 @@ Silver는 다음 여섯 Delta 테이블을 만듭니다. 분석용 네 테이블
 | `unclassified_events` | 유효하지만 아직 지원하지 않는 유형과 시스템 안내 |
 | `quarantine` | 필수값 오류 및 원본·업무 키 충돌 |
 
-동일 원본의 재처리와 후원·선물 업무 중복을 제거합니다. 상충하는 후원·선물은 이미 저장된 정상 행도 제외하고 충돌 키를 격리에 남깁니다. 여섯 테이블의 저장은 원자적이지 않으며, 일부 실패 시 같은 배치 재시도로 복구합니다. Gold를 추가할 때는 이 삭제를 반영하는 재계산 또는 변경 반영 방식을 사용해야 합니다.
+동일 원본의 재처리와 후원·선물 업무 중복을 제거합니다. 상충하는 후원·선물은 이미 저장된 정상 행도 제외하고 충돌 키를 격리에 남깁니다. 여섯 테이블의 저장은 원자적이지 않으며, 일부 실패 시 같은 배치 재시도로 복구합니다. Gold는 이 삭제를 진행 중인 회차에서는 자동으로, 끝난 회차에서는 `--full` 재계산으로 반영합니다.
 
 같은 Kafka 좌표의 원문·채널·Kafka 시각이 Bronze에서 달라지면 쓰기 전에 배치를 중단합니다. 이미 업무 중복으로 생략한 원본도 검사합니다. Bronze를 수정·삭제하거나 Kafka 토픽을 재생성해 좌표를 재사용할 때는 기존 원천과 분리된 경로로 운영해야 합니다.
 
@@ -122,8 +123,9 @@ app.bucket.uri=data/output/local/frames
 - Checkpoint: `data/output/local/frames/checkpoint`
 - Silver: `data/output/local/frames/silver/<table>`
 - Silver checkpoint: `data/output/local/frames/silver_checkpoint`
+- Gold: `data/output/local/frames/gold/<table>`
 
-Silver만 다른 경로를 쓰려면 `app.silver.path`, `app.silver.checkpoint.path`를 properties 파일에 지정합니다. 입력·출력·각 체크포인트 경로는 겹칠 수 없습니다. 데이터, 체크포인트와 로그는 모두 Git에서 제외된 `data/` 아래에 둡니다.
+Silver만 다른 경로를 쓰려면 `app.silver.path`, `app.silver.checkpoint.path`를 properties 파일에 지정합니다. Gold 출력은 `app.gold.path`, Gold가 읽는 Collector SQLite는 `app.control.db.path`(기본 `data/control.db`)로 바꿀 수 있습니다. 입력·출력·각 체크포인트 경로는 겹칠 수 없습니다. 데이터, 체크포인트와 로그는 모두 Git에서 제외된 `data/` 아래에 둡니다.
 
 기존 `data/output/local/bronze`, `dead_letter`, `checkpoint`는 그대로 보존합니다. 프레임 형식은 기존 테이블에 스키마를 병합하거나 기존 체크포인트를 재사용하지 않고 새 경로에서 시작합니다. `dead_letter` 경로 설정은 이전 설정과의 호환을 위해 남아 있지만 새 작업에서는 쓰지 않습니다.
 
@@ -262,7 +264,7 @@ source .venv/bin/activate
 - 대시보드: http://127.0.0.1:8000/dashboard (로그인 없이 접속)
 - Kafka UI: http://127.0.0.1:18080
 - Spark 출력: `data/output/local/frames/bronze`, `data/output/local/frames/checkpoint`
-- 기본 처리 주기는 30초입니다. 로컬 설정의 최초 실행은 `app.kafka.startingOffsets=earliest`로 Kafka에 남아 있는 가장 오래된 데이터부터 읽습니다. 재시작할 때는 새 형식의 체크포인트를 사용하며, 이미 Kafka에서 만료된 데이터까지 복구하지는 않습니다.
+- 로컬 설정의 처리 주기는 Bronze 5초, Silver 10초, Gold 10초입니다. properties에 간격이 없으면 30초입니다. 로컬 설정의 최초 실행은 `app.kafka.startingOffsets=earliest`로 Kafka에 남아 있는 가장 오래된 데이터부터 읽습니다. 재시작할 때는 새 형식의 체크포인트를 사용하며, 이미 Kafka에서 만료된 데이터까지 복구하지는 않습니다.
 - 기존 작업에서 전환할 때는 실행 중인 Spark를 종료한 뒤 같은 명령으로 다시 시작합니다. Collector도 재시작해야 앞서 수정한 `10100`의 SQLite 전용 처리가 적용됩니다.
 - Collector와 Spark 종료: 각 터미널에서 `Ctrl+C`. Kafka 종료: `docker compose -f kafka/compose.yaml down` (볼륨은 유지).
 
@@ -278,6 +280,27 @@ source .venv/bin/activate
 현재 Silver는 macOS/Linux의 로컬 파일시스템과 단일 writer를 지원합니다. 출력 경로의 파일 잠금으로 중복 실행을 막고, 파서 버전·입력·체크포인트를 `_silver_contract.json`에 고정합니다. 파서 계약을 바꿔 재구축할 때는 새 Silver 출력과 새 체크포인트를 함께 지정하세요. Bronze와 기존 출력은 보존합니다.
 
 파싱·중복 판정은 드라이버에서 10,000항목씩 처리합니다. Spark가 입력과 Delta 읽기·쓰기를 수행하며, 채널 수와 누적량 증가로 처리 주기를 따라가지 못하면 파싱·키 비교를 executor로 옮기는 것이 다음 확장 지점입니다. 대시보드는 현재 Collector 현황만 보여줍니다.
+
+6. Silver 테이블이 생성된 뒤 다른 터미널에서 Gold를 시작합니다. Gold는 Silver와 Collector의 방송 회차 기록(`data/control.db`)을 읽고, 트리거마다 새 이벤트가 들어온 회차와 진행 중인 회차만 다시 계산해 두 테이블의 해당 행을 교체합니다.
+
+```bash
+.venv/bin/spark-submit --properties-file spark/conf/local.properties \
+  spark/silver_to_gold.py --properties-file spark/conf/local.properties
+```
+
+- `gold/channel_minute_activity`: 채널 × 1분 채팅·참여자·후원·구독 알림 집계
+- `gold/broadcast_sessions`: 방송 회차별 요약과 수집 공백 표시(`data_status`)
+- `SPARK_GOLD_READY`는 스트림 시작을 뜻합니다. 갱신마다 `[spark-gold]` 로그와 `gold/_gold_manifest.json`에 계산 시각과 다시 계산한 회차가 남습니다. 체크포인트는 `gold_checkpoint`입니다.
+- Gold 테이블이 없으면 첫 갱신이 전체 계산을 합니다.
+
+전체를 다시 계산해야 할 때는 Silver와 Gold 스트림을 멈춘 뒤 `--full`로 한 번 실행합니다. 집계 규칙을 바꿨을 때, 또는 Silver 로그의 `removed`가 0보다 클 때(후원·선물 충돌로 이미 끝난 회차의 행이 지워진 경우) 필요합니다.
+
+```bash
+.venv/bin/spark-submit --properties-file spark/conf/local.properties \
+  spark/silver_to_gold.py --properties-file spark/conf/local.properties --full
+```
+
+배치 간격은 Bronze `spark.streaming.trigger.interval`(로컬 5초), Silver `app.silver.trigger.interval`(10초), Gold `app.gold.trigger.interval`(10초)입니다. 층별 키가 없으면 Bronze 값을 따릅니다. 간격을 정한 근거와 검토한 다른 방식은 [Gold 실시간 갱신 방식 결정](docs/decisions/2026-10-18-gold-live-refresh.md)에, 지표 정의와 방송 날짜·수집 공백 규칙은 [Gold 계약](docs/gold-data-contract.md)에 있습니다.
 
 ### 선택 사항: Pub/Sub emulator + collector
 
@@ -468,6 +491,7 @@ GCS용 프로필을 명시적으로 사용할 때만 ADC를 준비합니다. 기
 - Spark runtime 설정 / session 테스트
 - Spark Bronze job 단위 테스트
 - Silver 분류·검증·중복·충돌 처리 및 실행 설정 테스트
+- Gold 방송 회차 입력, 갱신 대상 판정, 층별 배치 간격 설정 검증
 
 권장 실행:
 
@@ -485,6 +509,12 @@ Silver의 실제 Delta 재처리, 격리 저장 직후 장애 복구, Bronze 스
 
 ```bash
 .venv/bin/python tests/check_silver.py
+```
+
+Gold의 회차 경계, 지표 정의, 수집 공백 판정, 스트림 증분 결과와 전체 재계산의 일치, 이벤트 없는 회차 종료 반영, Silver 삭제 커밋에서의 스트림 유지와 `--full` 보정은 아래 검사로 확인합니다.
+
+```bash
+.venv/bin/python tests/check_gold.py
 ```
 
 ## 참고

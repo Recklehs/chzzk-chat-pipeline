@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>방송 성적표 갱신</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Noto+Sans+KR:wght@400;500;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: one narrow column of picture panels; the stack of broadcast report cards is the recurring image */
+:root {
+  --bg: #f4f6f8;
+  --panel: #ffffff;
+  --ink: #18202c;
+  --muted: #5b6676;
+  --line: #d5dbe3;
+  --teal: #0b7f71;
+  --teal-soft: #d8f0ec;
+  --coral: #c8452e;
+  --coral-soft: #fbe2dc;
+  --amber: #b9770e;
+  --amber-soft: #fbecd2;
+  --display: "Black Han Sans", "Noto Sans KR", system-ui, sans-serif;
+  --body: "Noto Sans KR", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11161d; --panel: #1a212b; --ink: #e8edf3; --muted: #9aa6b5; --line: #2e3845;
+    --teal: #3cc4b0; --teal-soft: #173a36; --coral: #f07a62; --coral-soft: #3d2420;
+    --amber: #e9b04f; --amber-soft: #3a2e17; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11161d; --panel: #1a212b; --ink: #e8edf3; --muted: #9aa6b5; --line: #2e3845;
+  --teal: #3cc4b0; --teal-soft: #173a36; --coral: #f07a62; --coral-soft: #3d2420;
+  --amber: #e9b04f; --amber-soft: #3a2e17; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 17px; line-height: 1.6; }
+.wrap { max-width: 760px; margin: 0 auto; padding-inline: 16px; padding-block: 40px 64px; display: grid; gap: 28px; }
+h1, h2 { font-family: var(--display); font-weight: 400; letter-spacing: 0.01em; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(34px, 7vw, 52px); line-height: 1.15; }
+h2 { font-size: clamp(24px, 4.6vw, 32px); line-height: 1.2; }
+.lead { color: var(--muted); margin: 10px 0 0; max-width: 34em; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 24px 20px; display: grid; gap: 14px; min-width: 0; }
+.panel p { margin: 0; max-width: 36em; }
+.tag { font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em; color: var(--muted); text-transform: uppercase; }
+svg { width: 100%; height: auto; display: block; }
+svg text { font-family: var(--body); }
+.t-ink { fill: var(--ink); } .t-muted { fill: var(--muted); } .t-teal { fill: var(--teal); }
+.t-coral { fill: var(--coral); } .t-amber { fill: var(--amber); }
+.mono { font-family: var(--mono) !important; } .disp { font-family: var(--display) !important; }
+.box { fill: var(--panel); stroke: var(--line); stroke-width: 2; }
+.box-teal { fill: var(--teal-soft); stroke: var(--teal); stroke-width: 2; }
+.box-coral { fill: var(--coral-soft); stroke: var(--coral); stroke-width: 2; }
+.box-amber { fill: var(--amber-soft); stroke: var(--amber); stroke-width: 2; }
+.arrow { stroke: var(--muted); stroke-width: 3; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.arrow-amber { stroke: var(--amber); stroke-width: 3; fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 7 6; }
+/* scenario buttons + report cards */
+.modes { display: flex; flex-wrap: wrap; gap: 8px; }
+.modes button { font: inherit; font-weight: 700; font-size: 15px; border-radius: 999px; padding: 10px 16px; cursor: pointer;
+  border: 2px solid var(--ink); background: var(--panel); color: var(--ink); }
+.modes button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
+.modes button:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+.event { font-size: 15px; padding: 10px 14px; border-radius: 10px; background: var(--amber-soft); border: 2px solid var(--amber); justify-self: start; }
+.cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 560px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.card { border: 2px solid var(--line); border-radius: 12px; padding: 10px; display: grid; gap: 2px; background: var(--panel); min-width: 0; }
+.card .no { font-family: var(--display); font-size: 20px; line-height: 1.1; }
+.card .nm { font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+.card .dt { font-size: 12px; color: var(--muted); }
+.card .st { font-size: 12px; font-weight: 700; color: var(--muted); }
+.card.live { border-style: dashed; }
+.card.redo { border-color: var(--teal); background: var(--teal-soft); }
+.card.redo .st { color: var(--teal); }
+.result { font-weight: 700; padding: 12px 14px; border-radius: 12px; border: 2px solid var(--line); }
+.result .count { font-family: var(--display); font-size: 26px; font-variant-numeric: tabular-nums; }
+.why { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.why > div { border-radius: 14px; padding: 16px; border: 2px solid var(--line); display: grid; gap: 4px; align-content: start; min-width: 0; }
+.why .mark { font-family: var(--display); font-size: 26px; line-height: 1.1; }
+.why .nm { font-weight: 700; }
+.why p { font-size: 15px; color: var(--muted); }
+.why .no { border-color: var(--coral); } .why .no .mark { color: var(--coral); }
+.why .yes { border-color: var(--teal); background: var(--teal-soft); } .why .yes .mark { color: var(--teal); }
+.times { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.times > div { border-radius: 14px; padding: 16px; display: grid; gap: 2px; min-width: 0; }
+.times .big { font-family: var(--display); font-size: 36px; line-height: 1.1; }
+.times .fast { background: var(--amber-soft); border: 2px solid var(--amber); } .times .fast .big { color: var(--amber); }
+.times .exact { background: var(--teal-soft); border: 2px solid var(--teal); } .times .exact .big { color: var(--teal); }
+.times .note { font-size: 14px; color: var(--muted); }
+@media (prefers-reduced-motion: no-preference) { .card { transition: background .25s, border-color .25s; } }
+</style>
+</head>
+<body>
+
+<main class="wrap">
+  <header>
+    <div class="tag">CHZZK 파이프라인 · 채택한 Gold</div>
+    <h1>바뀐 방송의<br>성적표만 다시 씁니다</h1>
+    <p class="lead">라이브 대시보드를 위한 Gold 갱신 방식을 그림으로 봅니다.</p>
+  </header>
+
+  <!-- 1. two roads -->
+  <section class="panel" aria-labelledby="p1">
+    <div class="tag">큰 그림</div>
+    <h2 id="p1">대시보드로 가는 길은 두 개</h2>
+    <svg viewBox="0 0 720 270" role="img" aria-label="빠른 길: Collector 실시간 통계가 수 초 만에 대시보드로. 정확한 길: Bronze, Silver, Gold를 거쳐 평균 약 20초 만에 대시보드로">
+      <rect class="box" x="10" y="100" width="120" height="70" rx="14"/>
+      <text class="t-ink disp" x="70" y="142" text-anchor="middle" font-size="18">Collector</text>
+      <!-- fast road -->
+      <path class="arrow-amber" d="M130 112 C200 40 500 40 584 112"/>
+      <rect class="box-amber" x="250" y="18" width="220" height="50" rx="12"/>
+      <text class="t-amber" x="360" y="49" text-anchor="middle" font-size="15" font-weight="700">빠른 길 · 최근 60초 통계</text>
+      <!-- exact road -->
+      <path class="arrow" d="M138 150 h30 m-10 -10 l10 10 l-10 10"/>
+      <rect class="box" x="176" y="125" width="96" height="50" rx="10"/><text class="t-ink" x="224" y="156" text-anchor="middle" font-size="15" font-weight="700">Bronze</text>
+      <path class="arrow" d="M278 150 h22 m-10 -10 l10 10 l-10 10"/>
+      <rect class="box" x="306" y="125" width="96" height="50" rx="10"/><text class="t-ink" x="354" y="156" text-anchor="middle" font-size="15" font-weight="700">Silver</text>
+      <path class="arrow" d="M408 150 h22 m-10 -10 l10 10 l-10 10"/>
+      <rect class="box-teal" x="436" y="125" width="96" height="50" rx="10"/><text class="t-teal" x="484" y="156" text-anchor="middle" font-size="15" font-weight="700">Gold</text>
+      <path class="arrow" d="M538 150 h38 m-10 -10 l10 10 l-10 10"/>
+      <text class="t-muted" x="354" y="205" text-anchor="middle" font-size="14">정확한 길 · 5초 / 10초 / 10초 간격</text>
+      <!-- dashboard -->
+      <rect class="box" x="584" y="90" width="126" height="110" rx="14"/>
+      <text class="t-ink disp" x="647" y="130" text-anchor="middle" font-size="17">대시보드</text>
+      <rect class="box-amber" x="600" y="142" width="94" height="18" rx="5"/>
+      <rect class="box-teal" x="600" y="168" width="94" height="18" rx="5"/>
+      <text class="t-amber" x="360" y="250" text-anchor="middle" font-size="14">지금 속도는 빠른 길, 정확한 숫자는 정확한 길에서</text>
+    </svg>
+    <p>빠른 길은 Collector가 이미 들고 있는 통계를 보여주기만 합니다. 이 페이지는 <b>정확한 길의 마지막 칸, Gold</b> 이야기입니다.</p>
+  </section>
+
+  <!-- 2. stepper -->
+  <section class="panel" aria-labelledby="p2">
+    <div class="tag">Gold가 10초마다 하는 일</div>
+    <h2 id="p2">무슨 일이 생겼는지 보고, 그 방송만 다시 셉니다</h2>
+    <p>성적표는 방송마다 한 장입니다. 무슨 일이 생겼는지 골라 보세요.</p>
+    <div class="modes" role="group" aria-label="10초 동안 생긴 일">
+      <button type="button" id="m-live" aria-pressed="true">방송 중에 채팅이 옴</button>
+      <button type="button" id="m-late" aria-pressed="false">끝난 방송의 채팅이 늦게 옴</button>
+      <button type="button" id="m-end" aria-pressed="false">방송이 끝남</button>
+      <button type="button" id="m-none" aria-pressed="false">아무 일 없음</button>
+    </div>
+    <div class="event" id="event"></div>
+    <div class="cards" id="cards"></div>
+    <div class="result" id="result" aria-live="polite"></div>
+    <p>회차 1–8은 실제 수집 기록이고, 9번(방송 중)은 설명을 위한 예시입니다.</p>
+  </section>
+
+  <!-- 3. why redo is exact -->
+  <section class="panel" aria-labelledby="p3">
+    <div class="tag">다시 센다는 것</div>
+    <h2 id="p3">방송 한 회를 처음부터 다시 세니까 정확합니다</h2>
+    <svg viewBox="0 0 720 200" role="img" aria-label="Silver에서 9번 방송 채팅만 꺼내 처음부터 다시 세면 사람 수, 가장 긴 공백, 피크 분, 0건 여부가 모두 정확하게 나옴">
+      <rect class="box" x="10" y="30" width="200" height="140" rx="14"/>
+      <text class="t-ink disp" x="110" y="64" text-anchor="middle" font-size="18">Silver</text>
+      <rect class="box-teal" x="30" y="84" width="160" height="66" rx="10"/>
+      <text class="t-teal" x="110" y="112" text-anchor="middle" font-size="14" font-weight="700">9번 방송 채팅만</text>
+      <text class="t-ink" x="110" y="134" text-anchor="middle" font-size="13">시작~지금</text>
+      <path class="arrow" d="M218 100 h40 m-10 -10 l10 10 l-10 10"/>
+      <rect class="box-teal" x="266" y="20" width="444" height="160" rx="14"/>
+      <text class="t-teal disp" x="488" y="54" text-anchor="middle" font-size="18">9번 성적표 (새로 씀)</text>
+      <text class="t-ink" x="290" y="92" font-size="15">✓ 채팅한 사람 수 (같은 사람은 한 번)</text>
+      <text class="t-ink" x="290" y="120" font-size="15">✓ 가장 긴 빈 시간 · 수집 상태</text>
+      <text class="t-ink" x="290" y="148" font-size="15">✓ 채팅이 가장 많았던 분</text>
+      <text class="t-ink" x="290" y="170" font-size="13" opacity="0.8">늦게 온 채팅도 원래 시각에 들어감</text>
+    </svg>
+    <p>계산은 전체 재계산과 같은 Gold 코드를 씁니다. 범위만 “전체”에서 “바뀐 방송”으로 좁힙니다.</p>
+  </section>
+
+  <!-- 4. why this -->
+  <section class="panel" aria-labelledby="p4">
+    <div class="tag">왜 이 방법인가</div>
+    <h2 id="p4">다른 방법은 이래서 안 맞습니다</h2>
+    <div class="why">
+      <div class="no"><span class="mark">✗ 계수기</span><span class="nm">스트리밍 집계</span>
+        <p>더하기만 해서 빠릅니다. 하지만 공백·피크·0건은 못 세고, 정확한 사람 수는 워터마크만큼(예: 10분) 늦게 나옵니다.</p></div>
+      <div class="no"><span class="mark">✗ 전부 다시</span><span class="nm">처음 만든 배치 (지금은 --full)</span>
+        <p>정확하지만 쌓인 데이터 전체를 매번 셉니다. 쌓일수록 느려지고, 라이브가 아닙니다.</p></div>
+      <div class="yes"><span class="mark">✓ 바뀐 방송만</span><span class="nm">채택한 방식</span>
+        <p>정확하고, 10초마다 갱신됩니다. 끝난 방송은 건드리지 않아서 1년 치가 쌓여도 한 번에 하는 일의 양이 같습니다.</p></div>
+    </div>
+  </section>
+
+  <!-- 5. safety net -->
+  <section class="panel" aria-labelledby="p5">
+    <div class="tag">드문 경우를 위한 안전장치</div>
+    <h2 id="p5">아주 가끔은 전부 다시 셉니다</h2>
+    <svg viewBox="0 0 720 170" role="img" aria-label="Silver가 후원 충돌로 행을 지우면 스트림은 건너뛰고, Silver 로그의 removed가 0보다 크면 전부 다시 계산을 한 번 돌림">
+      <rect class="box-coral" x="10" y="40" width="200" height="90" rx="14"/>
+      <text class="t-coral" x="110" y="76" text-anchor="middle" font-size="15" font-weight="700">Silver가 후원을 지움</text>
+      <text class="t-ink" x="110" y="100" text-anchor="middle" font-size="13">같은 ID, 다른 금액일 때만</text>
+      <text class="t-muted" x="110" y="120" text-anchor="middle" font-size="12">지금까지 710건 중 0건</text>
+      <path class="arrow" d="M218 85 h40 m-10 -10 l10 10 l-10 10"/>
+      <rect class="box" x="266" y="40" width="190" height="90" rx="14"/>
+      <text class="t-ink" x="361" y="76" text-anchor="middle" font-size="15" font-weight="700">Gold 스트림은</text>
+      <text class="t-ink" x="361" y="100" text-anchor="middle" font-size="15" font-weight="700">멈추지 않고 건너뜀</text>
+      <path class="arrow" d="M464 85 h40 m-10 -10 l10 10 l-10 10"/>
+      <rect class="box-teal" x="512" y="40" width="198" height="90" rx="14"/>
+      <text class="t-teal" x="611" y="76" text-anchor="middle" font-size="15" font-weight="700">“removed &gt; 0” 이면</text>
+      <text class="t-ink" x="611" y="100" text-anchor="middle" font-size="15">전부 다시 한 번</text>
+      <text class="t-muted mono" x="611" y="120" text-anchor="middle" font-size="12">--full</text>
+    </svg>
+    <p>한 번도 일어나지 않은 경우를 위해 구조를 무겁게 만들지 않습니다. 진행 중인 방송은 매번 다시 세므로 자동으로 맞춰지고, 끝난 방송만 “전부 다시”로 보정합니다.</p>
+  </section>
+
+  <!-- 6. timing -->
+  <section class="panel" aria-labelledby="p6">
+    <div class="tag">화면에 뜨기까지</div>
+    <h2 id="p6">얼마나 빨리 보이나</h2>
+    <div class="times">
+      <div class="fast"><span class="big">수 초</span><b>지금 채팅 속도</b><span class="note">빠른 길 · Collector 통계</span></div>
+      <div class="exact"><span class="big">약 20초</span><b>정확한 성적표</b><span class="note">평균 약 20초, 최악 약 30초 (Bronze 5초 · Silver 10초 · Gold 10초 간격)</span></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  // Sessions 1-8 are the real Collector records; 9 is an illustrative live session.
+  var sessions = [
+    [1, '텐코 시부키', '9/22'], [2, '꼴랑이', '9/22'], [3, '조강현 그리고 스틸로', '9/22'],
+    [4, '아오쿠모 린', '9/22'], [5, '꼴랑이', '9/23'], [6, '텐코 시부키', '9/23'],
+    [7, '조강현 그리고 스틸로', '9/23'], [8, '아오쿠모 린', '9/23'], [9, '예시 채널', '오늘 · 방송 중']
+  ];
+  var modes = {
+    live: { redo: [9], event: '9번 방송에 새 채팅 40건', why: '방송 중인 9번만 다시 셈' },
+    late: { redo: [3, 9], event: '3번 방송(9/22 22:40) 채팅 1건이 늦게 도착 + 9번 새 채팅', why: '늦은 채팅이 속한 3번과 방송 중인 9번' },
+    end: { redo: [9], event: 'Collector 기록: 9번 방송 종료', why: '9번의 종료 시각·길이·상태를 확정' },
+    none: { redo: [], event: '새 채팅 없음, 방송 상태 변화 없음', why: '할 일이 없으면 아무것도 안 씀' }
+  };
+  var cards = document.getElementById('cards');
+  sessions.forEach(function (s) {
+    var el = document.createElement('div');
+    el.className = 'card' + (s[0] === 9 ? ' live' : '');
+    el.innerHTML = '<span class="no">' + s[0] + '</span><span class="nm">' + s[1] + '</span><span class="dt">' + s[2] + '</span><span class="st"></span>';
+    cards.appendChild(el);
+  });
+  function show(name) {
+    var m = modes[name];
+    Object.keys(modes).forEach(function (k) { document.getElementById('m-' + k).setAttribute('aria-pressed', String(k === name)); });
+    document.getElementById('event').textContent = m.event;
+    Array.prototype.forEach.call(cards.children, function (el, i) {
+      var id = sessions[i][0], redo = m.redo.indexOf(id) !== -1;
+      el.className = 'card' + (id === 9 ? ' live' : '') + (redo ? ' redo' : '');
+      el.querySelector('.st').textContent = redo ? '다시 셈' : '그대로';
+    });
+    document.getElementById('result').innerHTML = '<span class="count">' + m.redo.length + ' / ' + sessions.length + '</span> 장 다시 셈<br>' + m.why;
+  }
+  Object.keys(modes).forEach(function (k) { document.getElementById('m-' + k).addEventListener('click', function () { show(k); }); });
+  show('live');
+})();
+</script>
+</body>
+</html>
