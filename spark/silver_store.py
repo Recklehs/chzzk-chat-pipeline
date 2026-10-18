@@ -264,8 +264,11 @@ def validate_bronze_source(batch, bronze_path=None):
     coordinates = list(SOURCE_KEY[:3])
     source = batch
     if bronze_path is not None:
-        # ponytail: scan full history for immutable coordinates; add a coordinate index if scans exceed the trigger interval.
+        # Bronze is appended in offset order, so the range lets Delta file stats skip unrelated history.
+        # A recreated topic restarts offsets inside old files' ranges, and those files are still read.
+        low, high = batch.agg(F.min('offset'), F.max('offset')).first()
         source = (batch.sparkSession.read.format('delta').load(bronze_path)
+                  .filter(F.col('offset').between(low, high))
                   .join(F.broadcast(batch.select(*coordinates).distinct()), coordinates, 'left_semi'))
     timestamp = 'kafka_timestamp' if 'kafka_timestamp' in source.columns else 'kafka_timestamp_ms'
     # DISTINCT includes NULL and omits ingested_at: replay may change ingestion time, never Kafka content.
