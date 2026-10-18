@@ -39,7 +39,7 @@ flowchart LR
 | `unique_chatters` | BIGINT | chat_messages의 NULL이 아닌 `actor_user_id` 고유 수 |
 | `donation_count` | BIGINT | donations 행 수 |
 | `anonymous_donation_count` | BIGINT | 그중 `is_anonymous=true` |
-| `donation_amount_currency` | BIGINT | `pay_type=CURRENCY`인 `pay_amount` 합. 원화로 표기하지 않음 |
+| `donation_amount_currency` | BIGINT | `pay_type=CURRENCY`인 `pay_amount` 합. 단위는 원(2026-10-18 운영자 확인) |
 | `other_pay_type_donation_count` | BIGINT | `pay_type≠CURRENCY` 후원 수. 금액은 합산하지 않음 |
 | `subscription_notification_count` | BIGINT | subscription_notifications 행 수 |
 | `subscription_gift_count` | BIGINT | subscription_gifts 행 수 |
@@ -83,7 +83,7 @@ flowchart LR
 
 - 채팅량은 수신한 일반 채팅 전체(`CBOTBLIND` 포함)다. 가려진 채팅을 뺀 값은 `chat_count − blinded_chat_count`로 표시하고 이름을 따로 붙인다.
 - 후원·선물 메시지는 채팅량에 포함하지 않는다(Silver에서 이미 테이블이 분리됨).
-- 후원 금액은 `pay_type`별로 구분한다. 단위가 확인되기 전 "원화 매출"로 표기하지 않는다.
+- 후원 금액은 `pay_type`별로 구분한다. `CURRENCY`의 단위는 원이다(2026-10-18 운영자 확인). 다른 `pay_type`은 단위가 확인되기 전까지 금액을 합산하거나 원으로 표기하지 않는다.
 - 구독 알림 수를 "신규 구독 수"나 "갱신 수"로 부르지 않는다. 구독 선물 수신 수를 전체 구독 수로 부르지 않는다.
 - 후원자는 대부분 익명이므로(관측 약 85%) 고유 후원자 수 지표는 두지 않는다.
 - `unclassified_events`와 `quarantine`은 Gold 지표에 넣지 않는다.
@@ -133,9 +133,12 @@ flowchart LR
 - Gold Delta는 `deltalake`(delta-rs) Python 패키지로 직접 읽는다. Spark를 띄우지 않으며, 별도 JSON 복사본을 만들지 않는다. 이 의존성은 대시보드 전용 requirements에만 넣고 Collector 이미지에는 추가하지 않는다.
 - 대시보드는 Gold를 읽기만 한다. 10초마다 다시 읽고, 화면에 `_gold_manifest.json`의 계산 시각을 표시한다.
 - 초 단위 "지금 채팅 속도"는 Collector의 기존 최근 60초 통계 API에서 가져온다. Gold와 별개의 빠른 길이며, Collector가 꺼져 있으면 그 칸만 꺼짐으로 표시한다.
-- 화면 구성:
-  - 방송 회차 목록: 방송 날짜·채널별 요약 카드와 `data_status` 표시. 진행 중인 회차는 상태 대신 "방송 중"으로 표시한다.
-  - 회차 상세: 요약 수치, 분 단위 채팅 수·고유 참여자 시계열과 후원 건수, 공백 구간 강조. 이벤트가 없는 분은 회차 범위 안에서 0으로 채워 그린다. 진행 중인 회차는 Gold가 그 행을 계산한 시점(`started_at + duration_minutes`)까지 그린다. 매니페스트는 테이블 뒤에 쓰이므로 끝 시각을 매니페스트에서 가져오지 않는다.
+- 화면 구성: 시청자용 서비스처럼 채널을 골라 들어가는 흐름이다. 내부 용어(Gold, 회차, Collector) 대신 "방송"과 "업데이트 n초 전"을 쓴다.
+  - 홈: 지금 방송 중인 채널(LIVE, Collector 최근 60초 채팅/분), 채널 카드(방송 수, 방송당 평균 채팅, 최고 분당 채팅, 최근 방송 추세), 모든 채널의 최근 방송
+  - 채널(`#/channel/<id>`): 방송당 평균 채팅·채팅한 사람(끝난 방송만), 지금까지 받은 후원 금액(건수는 보조 표시), 가장 붐빈 순간, 방송별 채팅 막대와 채팅한 사람 선(막대를 누르면 그 방송으로 이동), 방송 기록
+  - 방송(`#/channel/<id>/broadcast/<session_id>`): 지표 탭으로 바꾸는 분 단위 차트와 최고점·비어 있는 구간, 보조 지표, 시간대별 차트, 같은 채널의 다른 방송. 이벤트가 없는 분은 0으로 채워 그린다. 진행 중인 방송은 Gold가 그 행을 계산한 시점(`started_at + duration_minutes`)까지 그린다. 매니페스트는 테이블 뒤에 쓰이므로 끝 시각을 매니페스트에서 가져오지 않는다.
+  - 후원은 금액(`donation_amount_currency`)을 큰 숫자와 차트 기준으로, 건수·익명 건수를 보조로 보여준다. `CURRENCY` 금액은 원으로 표시한다.
+  - 상태 표시: `CHECK_GAP`은 "일부 구간 비어 있음", `NO_DATA`는 "수집된 채팅 없음", 진행 중은 LIVE
 - 구현: `dashboard/app.py`, `dashboard/templates/gold.html`. API는 `GET /api/sessions`(회차 목록과 계산 시각), `GET /api/sessions/{id}`(회차 요약, 분 단위 점, 긴 공백 구간), `GET /api/live`(Collector 최근 60초)다.
 - 차트의 공백 구간은 이벤트가 없는 분이 `gap_minutes`(10분) 이상 이어진 구간이다. `data_status`는 이벤트 시각 기준이라 분 단위인 차트 구간과 수 초 차이가 날 수 있다.
 

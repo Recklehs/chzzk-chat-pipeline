@@ -319,8 +319,8 @@ Gold가 `Sessions … overlap` 또는 `… ends before it starts` 오류로 멈�
 .venv/bin/uvicorn dashboard.app:app --port 8001
 ```
 
-- 대시보드: http://127.0.0.1:8001 (Collector 대시보드 상단의 "방송 분석 보기"로도 이동)
-- 방송 회차 목록(방송 날짜별, 수집 상태 표시)과 회차 상세(요약 수치, 분 단위 채팅 수·채팅한 사람·후원 차트, 긴 공백 구간 표시)를 10초마다 다시 읽습니다.
+- 대시보드: http://127.0.0.1:8001 (Collector 대시보드 상단의 "방송 분석 보기"로도 이동. 대시보드 아래 "운영자 화면"은 Collector 대시보드로 연결)
+- 화면 흐름: 홈(지금 방송 중인 채널, 채널 목록, 최근 방송) → 채널(방송당 평균, 후원, 가장 붐빈 순간, 방송별 채팅 차트, 방송 기록) → 방송(분 단위 채팅·채팅한 사람·후원·구독 알림 차트, 비어 있는 구간 표시, 시간대별 차트). 주소가 화면마다 달라(`#/channel/<id>`, `#/channel/<id>/broadcast/<id>`) 링크로 공유할 수 있고, 10초마다 다시 읽습니다.
 - 상단 "지금 채팅 속도"는 Collector의 최근 60초 통계(`/channels`)입니다. Collector가 꺼져 있으면 그 칸만 꺼짐으로 표시합니다.
 - 환경 변수: `GOLD_PATH`(기본 `data/output/local/frames/gold`), `COLLECTOR_URL`(서버가 Collector `/channels`를 부르는 주소, 기본 `http://127.0.0.1:8000`), `COLLECTOR_PUBLIC_URL`(브라우저의 "수집 대시보드" 링크 주소, 기본은 `COLLECTOR_URL`과 같음), `GOLD_DASHBOARD_REFRESH_SECONDS`(기본 10). Collector 쪽 링크 주소는 `GOLD_DASHBOARD_URL`(기본 `http://127.0.0.1:8001`, 빈 값이면 숨김)입니다.
 - 대시보드에는 인증이 없고 채널별 채팅·후원 통계를 그대로 보여줍니다. 위 명령은 `127.0.0.1`에만 열리므로, 다른 컴퓨터에서 보려고 `--host 0.0.0.0`으로 열 때는 앞단에 인증이 있는 프록시를 두세요.
