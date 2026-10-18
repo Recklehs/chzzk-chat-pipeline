@@ -111,7 +111,8 @@ def read_sessions(db_path, now):
 
 def record(session):
     """The Collector fields a Gold session row was computed from."""
-    return micros(session['started_at']), micros(session['ended_at']), session['stop_reason'], session['channel_name']
+    return (session['channel_id'], micros(session['started_at']), micros(session['ended_at']),
+            session['stop_reason'], session['channel_name'])
 
 
 def changed_sessions(sessions, stored):
@@ -123,18 +124,21 @@ def changed_sessions(sessions, stored):
 def widen_loose(loose, sessions, affected, stored):
     """Add each rewritten session's span to the session-less minute ranges that get rewritten too.
 
-    A changed start or end moves events between a session and no session. The span is stretched to the
-    session's previously stored first/last event so both sides are rewritten and every event is counted once.
+    A changed start, end or channel moves events between a session and no session. The span is stretched to
+    the session's previously stored first/last event, on both its current and stored channel, so both sides
+    are rewritten and every event is counted once.
     """
     for s in sessions:
         if s['session_id'] not in affected:
             continue
-        first, last = stored.get(s['session_id'], {}).get('events', (None, None))
+        previous = stored.get(s['session_id'], {})
+        first, last = previous.get('events', (None, None))
         low = min(v for v in (micros(s['started_at']), first) if v is not None)
         high = max(v for v in (micros(s['effective_end']) - 1, last, low) if v is not None)
         low, high = low - low % MINUTE_US, high - high % MINUTE_US
-        old = loose.get(s['channel_id'])
-        loose[s['channel_id']] = (min(low, old[0]), max(high, old[1])) if old else (low, high)
+        for channel in {s['channel_id'], previous.get('record', (s['channel_id'],))[0]}:
+            old = loose.get(channel)
+            loose[channel] = (min(low, old[0]), max(high, old[1])) if old else (low, high)
     return loose
 
 
@@ -275,10 +279,11 @@ def refresh(spark, silver_path, gold_path, control_db, events=None, now=None):
     if not (Path(gold_path) / 'broadcast_sessions' / '_delta_log').exists():
         return run(spark, silver_path, gold_path, control_db, now)
     sessions = read_sessions(control_db, now)
-    stored = {r.session_id: {'record': (r.started_us, r.ended_us, r.stop_reason, r.channel_name),
+    stored = {r.session_id: {'record': (r.channel_id, r.started_us, r.ended_us, r.stop_reason, r.channel_name),
                              'events': (r.first_us, r.last_us)} for r in
               spark.read.format('delta').load(f'{gold_path}/broadcast_sessions')
-              .select('session_id', F.unix_micros('started_at').alias('started_us'), F.unix_micros('ended_at').alias('ended_us'),
+              .select('session_id', 'channel_id', F.unix_micros('started_at').alias('started_us'),
+                      F.unix_micros('ended_at').alias('ended_us'),
                       'stop_reason', 'channel_name', F.unix_micros('first_event_at').alias('first_us'),
                       F.unix_micros('last_event_at').alias('last_us')).collect()}
     affected = changed_sessions(sessions, stored)

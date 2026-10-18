@@ -66,16 +66,17 @@ def test_back_to_back_sessions_and_missing_db(tmp_path):
 
 def test_refresh_targets_ongoing_new_and_changed_sessions_only():
     start, ended = datetime(2026, 9, 22, 17, 0, tzinfo=timezone.utc), datetime(2026, 9, 22, 18, 0, tzinfo=timezone.utc)
-    def session(session_id, ended_at, reason='BROADCAST_ENDED', started_at=start):
-        return {'session_id': session_id, 'started_at': started_at, 'ended_at': ended_at,
+    def session(session_id, ended_at, reason='BROADCAST_ENDED', started_at=start, channel='a'):
+        return {'session_id': session_id, 'channel_id': channel, 'started_at': started_at, 'ended_at': ended_at,
                 'stop_reason': reason, 'channel_name': 'name'}
     sessions = [session(1, ended), session(2, None), session(3, ended), session(4, ended),
-                session(5, ended, started_at=start + timedelta(minutes=5))]
-    stored = {i: {'record': (micros(start), micros(ended), 'BROADCAST_ENDED', 'name')} for i in (1, 5)}
-    stored[2] = {'record': (micros(start), None, None, 'name')}
-    stored[4] = {'record': (micros(start), micros(ended), 'SERVER_SHUTDOWN', 'name')}
-    # 1 is unchanged; 2 is live, 3 is not in Gold yet, 4 has a corrected end reason, 5 a corrected start.
-    assert changed_sessions(sessions, stored) == {2, 3, 4, 5}
+                session(5, ended, started_at=start + timedelta(minutes=5)), session(6, ended, channel='b')]
+    stored = {i: {'record': ('a', micros(start), micros(ended), 'BROADCAST_ENDED', 'name')} for i in (1, 5, 6)}
+    stored[2] = {'record': ('a', micros(start), None, None, 'name')}
+    stored[4] = {'record': ('a', micros(start), micros(ended), 'SERVER_SHUTDOWN', 'name')}
+    # 1 is unchanged; 2 is live, 3 is not in Gold yet, 4 has a corrected end reason, 5 a corrected start,
+    # 6 a corrected channel.
+    assert changed_sessions(sessions, stored) == {2, 3, 4, 5, 6}
 
 
 def test_rewritten_sessions_also_rewrite_session_less_rows_their_boundaries_moved():
@@ -89,6 +90,9 @@ def test_rewritten_sessions_also_rewrite_session_less_rows_their_boundaries_move
     stored = {1: {'events': (10 * minute, 25 * minute)}}
     loose = widen_loose({'b': (90 * minute, 95 * minute)}, sessions, {1, 2}, stored)
     assert loose == {'a': (10 * minute, 25 * minute), 'b': (90 * minute, 129 * minute)}
+    # Session 3 moved from channel 'old' to 'c': both channels' session-less rows in its span are rewritten.
+    stored[3] = {'record': ('old',), 'events': (minute, 3 * minute)}
+    assert widen_loose({}, sessions, {3}, stored) == {'c': (0, 4 * minute), 'old': (0, 4 * minute)}
 
 
 def test_replace_conditions_cover_sessions_and_session_less_minute_ranges():

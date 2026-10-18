@@ -132,6 +132,13 @@ def main():
                 refresh(spark,silver_path,gold_path,db,now=NOW)
                 assert table('broadcast_sessions').filter('session_id = 4').first().chat_count==1
                 matches_full('a new session covering a session-less event')
+                # A corrected channel moves session 3 away from channel 'other'; its chats there become session-less.
+                with closing(sqlite3.connect(db)) as con:
+                    con.execute("UPDATE monitoring_sessions SET channel_id='third' WHERE id=3")
+                    con.commit()
+                refresh(spark,silver_path,gold_path,db,now=NOW)
+                assert table('broadcast_sessions').filter('session_id = 3').first().data_status=='NO_DATA'
+                matches_full('a corrected session channel')
                 print('Gold timer refresh closes a session that received no events.',flush=True)
                 # A Silver business-key conflict deletes d1. The stream skips that commit instead of failing,
                 # so ended session 1 keeps the stale donation until --full reconciles it.
