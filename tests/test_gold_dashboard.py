@@ -21,10 +21,10 @@ def gold(tmp_path, computed_at=at(11, 0)):
     sessions = [
         {'session_id': 1, 'channel_id': 'a', 'channel_name': 'one', 'started_at': at(10, 0, 30), 'ended_at': at(10, 15),
          'stop_reason': 'BROADCAST_ENDED', 'broadcast_date_kst': date(2026, 9, 22), 'chat_count': 3,
-         'data_status': 'CHECK_GAP', 'max_gap_minutes': 13.5},
+         'duration_minutes': 14.5, 'data_status': 'CHECK_GAP', 'max_gap_minutes': 13.5},
         {'session_id': 2, 'channel_id': 'b', 'channel_name': 'two', 'started_at': at(10, 50), 'ended_at': None,
          'stop_reason': None, 'broadcast_date_kst': date(2026, 9, 22), 'chat_count': 0,
-         'data_status': 'NO_DATA', 'max_gap_minutes': 10.0},
+         'duration_minutes': 10.0, 'data_status': 'NO_DATA', 'max_gap_minutes': 10.0},
     ]
     zeros = {'blinded_chat_count': 0, 'unique_chatters': 1, 'donation_count': 0, 'donation_amount_currency': 0,
              'subscription_notification_count': 0, 'subscription_gift_count': 0}
@@ -61,7 +61,7 @@ def test_session_minutes_are_filled_with_zeros_and_long_silences_become_gaps(tmp
     assert body['gaps'] == [{'start': '2026-09-22T10:01:00+00:00', 'end': '2026-09-22T10:13:00+00:00', 'minutes': 13}]
 
 
-def test_ongoing_session_runs_until_the_last_gold_computation(tmp_path):
+def test_ongoing_session_runs_for_the_duration_gold_wrote(tmp_path):
     body = client(gold(tmp_path)).get('/api/sessions/2').json()
     assert len(body['minutes']) == 10 and not any(p['chat_count'] for p in body['minutes'])
     assert body['gaps'] == [{'start': '2026-09-22T10:50:00+00:00', 'end': '2026-09-22T10:59:00+00:00', 'minutes': 10}]
@@ -147,3 +147,23 @@ def test_detail_without_manifest_uses_the_default_gap_threshold(tmp_path):
     body = client(path).get('/api/sessions/1').json()
     assert body['gap_minutes'] == 10
     assert [g['minutes'] for g in body['gaps']] == [13]
+
+
+def test_live_span_comes_from_the_table_not_a_manifest_written_later(tmp_path):
+    # Gold writes the tables, then the manifest. A read in between pairs new rows with the old computed_at;
+    # the span must still come from duration_minutes on the same row (10:50 + 10 = 11:00).
+    path = gold(tmp_path, computed_at=at(10, 55))
+    zeros = {'blinded_chat_count': 0, 'unique_chatters': 1, 'donation_count': 0, 'donation_amount_currency': 0,
+             'subscription_notification_count': 0, 'subscription_gift_count': 0}
+    write_deltalake(str(tmp_path / 'channel_minute_activity'), pa.Table.from_pylist(
+        [{'channel_id': 'b', 'minute_start': at(10, 57), 'session_id': 2, 'chat_count': 4, **zeros}]), mode='append')
+    app = client(path)
+    spark = app.get('/api/sessions').json()['sessions'][0]['sparkline']
+    assert spark.index(4) == 16  # 7 of 10 minutes in, not squashed into the last slice of a 5-minute span
+    assert len(app.get('/api/sessions/2').json()['minutes']) == 10
+
+
+def test_collector_link_can_differ_from_the_server_side_address(tmp_path):
+    app = TestClient(create_app(gold_path=gold(tmp_path), collector_url='http://collector:8000',
+                                collector_link='https://collector.example', live=lambda url: []))
+    assert 'href="https://collector.example/dashboard"' in app.get('/').text
