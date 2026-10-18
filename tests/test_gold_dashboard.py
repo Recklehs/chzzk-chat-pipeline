@@ -139,3 +139,11 @@ def test_new_computed_at_alone_reuses_cached_listing(tmp_path, monkeypatch):
     body = app.get('/api/sessions').json()
     assert len(calls) == 1 and body['computed_at'] == '2026-09-22T11:05:00+00:00'
 
+
+
+def test_detail_without_manifest_uses_the_default_gap_threshold(tmp_path):
+    path = gold(tmp_path)
+    (tmp_path / '_gold_manifest.json').unlink()
+    body = client(path).get('/api/sessions/1').json()
+    assert body['gap_minutes'] == 10
+    assert [g['minutes'] for g in body['gaps']] == [13]
