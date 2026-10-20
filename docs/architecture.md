@@ -145,12 +145,13 @@ Silver의 실행 진입점은 [spark/bronze_to_silver.py](../spark/bronze_to_sil
 | [spark/bronze_to_silver.py](../spark/bronze_to_silver.py) | 경로 검증, 로컬 writer 잠금, 파서 계약 고정, 연속/available-now 실행 |
 | [spark/silver_parser.py](../spark/silver_parser.py) | 원본 배열 인덱스 유지, 엄격한 필드 검증, 유형 분류, 익명·프로필 처리, UTC/KST 시간 변환 |
 | [spark/silver_store.py](../spark/silver_store.py) | 명시적 스키마, 원본·업무 키 비교, 충돌 격리와 기존 정상 행 제외, 멱등 MERGE |
+| [spark/silver_native.py](../spark/silver_native.py) | 위 두 모듈의 규칙을 Spark 식으로 실행. 스트림이 쓰는 구현이며, 두 Python 모듈은 동일성 검사의 기준 답안 |
 
 출력은 `chat_messages`, `donations`, `subscription_gifts`, `subscription_notifications`, `unclassified_events`, `quarantine`이다. 분석용 네 테이블과 미분류 테이블은 공통 컬럼을 각 행에 가진다. 통합 부모 테이블이나 집계는 만들지 않는다. [데이터 계약](silver-data-contract.md)에 행의 의미·필수값·키·품질 처리 규칙을 명시한다.
 
 충돌 키를 quarantine에 먼저 저장한 뒤 관련 정상 행을 삭제하므로, 그 사이 장애가 나도 같은 배치 재시도로 제외를 완료한다. 여섯 테이블 전체의 원자적 커밋은 제공하지 않는다. Gold 스트림은 이 삭제 커밋을 `skipChangeCommits`로 건너뛴다. 진행 중인 회차는 트리거마다 다시 계산되어 반영되지만, 끝난 회차는 `--full`을 실행해야 반영된다. Silver 로그의 `removed`가 0보다 크면 `--full`을 실행한다.
 
-현재 Silver는 macOS/Linux 로컬 파일시스템의 단일 writer만 지원한다. 파싱·중복 판정은 드라이버에서 10,000항목씩 수행하고 Spark는 Delta 읽기·쓰기를 담당한다. 처리량이 커지면 executor 파싱·조인으로 확장한다. 계약 변경 시 새 출력과 체크포인트에서 Bronze를 다시 정제한다.
+현재 Silver는 macOS/Linux 로컬 파일시스템의 단일 writer만 지원한다. 파싱·중복 판정은 Spark 식(VARIANT, join, groupBy)으로 executor가 나눠 처리하고 driver에는 행을 모으지 않는다. 같은 입력에서 Python 기준 구현과 결과가 같은지 `tests/check_silver_native.py`로 확인한다([결정 기록](decisions/2026-10-20-silver-native.md)). 계약 변경 시 새 출력과 체크포인트에서 Bronze를 다시 정제한다.
 
 ## 4. 보조 구성과 현재 범위
 

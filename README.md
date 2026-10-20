@@ -30,6 +30,7 @@
 │   ├── bronze_to_silver.py
 │   ├── silver_parser.py
 │   ├── silver_store.py
+│   ├── silver_native.py
 │   ├── silver_to_gold.py
 │   ├── submit.ps1
 │   └── conf/
@@ -282,7 +283,7 @@ source .venv/bin/activate
 
 현재 Silver는 macOS/Linux의 로컬 파일시스템과 단일 writer를 지원합니다. 출력 경로의 파일 잠금으로 중복 실행을 막고, 파서 버전·입력·체크포인트를 `_silver_contract.json`에 고정합니다. 파서 계약을 바꿔 재구축할 때는 새 Silver 출력과 새 체크포인트를 함께 지정하세요. Bronze와 기존 출력은 보존합니다.
 
-파싱·중복 판정은 드라이버에서 10,000항목씩 처리합니다. Spark가 입력과 Delta 읽기·쓰기를 수행하며, 채널 수와 누적량 증가로 처리 주기를 따라가지 못하면 파싱·키 비교를 executor로 옮기는 것이 다음 확장 지점입니다. 대시보드는 현재 Collector 현황만 보여줍니다.
+파싱·중복 판정·충돌 격리는 `spark/silver_native.py`가 Spark 식으로 처리합니다. JSON은 VARIANT로 읽어 타입을 구분하고, 키 비교는 join과 groupBy로 executor가 나눠 처리하므로 driver에 행을 모으지 않습니다. 밀린 Bronze를 한 배치로 받아도 driver 메모리를 늘릴 필요가 없습니다. Python 구현(`silver_parser.py`, `silver_store.py`)은 규칙의 기준 답안으로 남아 있고, 아래 `check_silver_native.py`가 두 구현의 결과가 같은지 확인합니다. 바꾼 이유와 검증 결과는 [Silver Spark 네이티브 전환](docs/decisions/2026-10-20-silver-native.md)에 있습니다. 대시보드는 현재 Collector 현황만 보여줍니다.
 
 6. Silver 테이블이 생성된 뒤 다른 터미널에서 Gold를 시작합니다. Gold는 Silver와 Collector의 방송 회차 기록(`data/control.db`)을 읽고, 트리거마다 새 이벤트가 들어온 회차와 진행 중인 회차만 다시 계산해 두 테이블의 해당 행을 교체합니다.
 
@@ -533,6 +534,12 @@ Silver의 실제 Delta 재처리, 격리 저장 직후 장애 복구, Bronze 스
 
 ```bash
 .venv/bin/python tests/check_silver.py
+```
+
+Spark 네이티브 Silver가 Python 기준 구현과 같은 결과를 내는지는 아래 검사로 확인합니다. 한 필드씩 깨뜨린 합성 프레임 약 6,500개의 파싱 결과와, 중복·재전달·충돌·이전 격리가 섞인 배치 시퀀스의 여섯 테이블을 비교합니다. `--real`을 붙이면 로컬 Bronze 전체를 새 방식으로 처리해 지금의 Silver와도 비교합니다(임시 디렉터리에 쓰며 기존 데이터는 바꾸지 않습니다).
+
+```bash
+.venv/bin/python tests/check_silver_native.py --real
 ```
 
 Gold의 회차 경계, 지표 정의, 수집 공백 판정, 스트림 증분 결과와 전체 재계산의 일치, 이벤트 없는 회차 종료 반영, Silver 삭제 커밋에서의 스트림 유지와 `--full` 보정은 아래 검사로 확인합니다.
