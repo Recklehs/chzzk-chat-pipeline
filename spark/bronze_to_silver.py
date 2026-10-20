@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 from spark.config import parse_properties_file
 from spark.kafka_raw_to_bronze import RuntimeSettings, create_spark_session, load_runtime_settings
 from spark.silver_parser import PARSER_VERSION
-from spark.silver_store import write_batch
+from spark.silver_native import write_batch
 
 
 @dataclass(frozen=True)

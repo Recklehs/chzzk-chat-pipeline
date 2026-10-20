@@ -271,7 +271,7 @@ quarantine 재처리 시 동일 `(원본 키, parser_version)` 오류 행을 중
 
 Bronze를 읽는 Silver Spark 작업 하나를 둔다. 한 스트리밍 쿼리가 `foreachBatch`에서 본문을 펼치고 공통 필드를 한 번 해석한 뒤, 유형별 검증과 여섯 출력으로 분기한다. 유형마다 별도 서비스나 Kafka 토픽을 만들지 않는다. 테이블별 함수는 필요하지만 범용 플러그인·상속 구조는 만들지 않는다.
 
-실행은 `spark/bronze_to_silver.py`, 파싱은 `spark/silver_parser.py`, 스키마·중복 판정·저장은 `spark/silver_store.py`가 담당한다. 파싱·키 비교는 로컬 드라이버에서 10,000항목씩 처리한다. 한 프레임과 Spark 입력 파티션의 메모리는 별도로 필요하므로 전체 메모리 상한을 10,000행으로 보장한다는 뜻은 아니다. 처리량이 이 방식을 초과하면 executor 파싱·조인으로 확장한다.
+실행은 `spark/bronze_to_silver.py`가, 파싱·중복 판정·저장은 `spark/silver_native.py`가 Spark 식으로 담당한다. 이 계약의 규칙은 `spark/silver_parser.py`(파싱)와 `spark/silver_store.py`(스키마·키 비교·저장)에 Python으로도 구현되어 있으며, 이 Python 구현을 기준 답안으로 삼는다. 두 구현은 `tests/check_silver_native.py`에서 같은 입력에 같은 여섯 테이블을 내야 한다. 의도된 차이는 [Silver Spark 네이티브 전환](decisions/2026-10-20-silver-native.md)에 적는다.
 
 입력이 있는 배치는 Kafka 좌표의 원문 불변성을 확인하기 위해 Bronze 전체 이력에서 해당 좌표를 조회한다. 좌표는 Bronze의 날짜 파티션 키가 아니므로 이 조회 비용은 이력 크기에 따라 증가할 수 있으며, 파싱을 executor로 옮기는 것만으로 해결되지 않는다. 빈 배치는 이 검사를 생략한다. 무결성 검사를 유지하는 대신 현재 조회 비용을 수용하며, 조회 시간이 트리거 간격을 초과하면 원본 좌표로 조회할 수 있는 인덱스나 저장 구조를 마련한다.
 

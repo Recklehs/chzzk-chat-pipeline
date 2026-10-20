@@ -16,7 +16,7 @@ from test_silver import MS, donation, frame, message
 def main():
     from delta import configure_spark_with_delta_pip
     from pyspark.sql import SparkSession
-    from spark import silver_store
+    from spark import silver_native, silver_store
     builder=(SparkSession.builder.master('local[2]').appName('check-silver')
              .config('spark.ui.enabled','false').config('spark.sql.shuffle.partitions','2')
              .config('spark.sql.session.timeZone','UTC')
@@ -45,7 +45,7 @@ def main():
                 attempt=df([changed])
                 attempt.write.format('delta').mode('append').save(source_path)
                 rejected_output=root+'/rejected-silver'
-                try:silver_store.write_batch(attempt,0,rejected_output,source_path)
+                try:silver_native.write_batch(attempt,0,rejected_output,source_path)
                 except ValueError as exc:assert 'Bronze source content conflict' in str(exc)
                 else:raise AssertionError('changed source was accepted')
                 assert not Path(rejected_output).exists(), 'wrote output before input validation'
@@ -72,26 +72,26 @@ def main():
                       frame([message(11,extras={'month':8})],cmd=93102,offset=2),
                       frame([message(30,profile='{}')],cmd=93102,offset=3),
                       frame([message(12,extras={'giftType':'SUBSCRIPTION_GIFT_RECEIVER','giftId':'gift','receiverUserIdHash':'recipient'})],cmd=93102,offset=4)])
-            silver_store.write_batch(first,0,output)
-            silver_store.write_batch(first,0,output)
+            silver_native.write_batch(first,0,output)
+            silver_native.write_batch(first,0,output)
             def rows(table):return spark.read.format('delta').load(output+'/'+table).collect()
             assert len(rows('chat_messages'))==2
             assert len(rows('donations'))==len(rows('subscription_gifts'))==len(rows('subscription_notifications'))==len(rows('unclassified_events'))==1
             assert len(rows('quarantine'))==1
             conflicting=df([frame([donation(2000)],cmd=93102,offset=5)])
-            original=silver_store.merge_quarantine
+            original=silver_native.merge_quarantine_frame
             def write_then_crash(*args,**kwargs):
                 original(*args,**kwargs)
                 raise RuntimeError('synthetic interruption after quarantine commit')
-            with patch.object(silver_store,'merge_quarantine',side_effect=write_then_crash):
-                try:silver_store.write_batch(conflicting,1,output)
+            with patch.object(silver_native,'merge_quarantine_frame',side_effect=write_then_crash):
+                try:silver_native.write_batch(conflicting,1,output)
                 except RuntimeError as exc:assert 'synthetic interruption' in str(exc)
                 else:raise AssertionError('failure not injected')
             assert len(rows('donations'))==1
-            silver_store.write_batch(conflicting,1,output)
+            silver_native.write_batch(conflicting,1,output)
             assert not rows('donations')
             assert len(rows('quarantine'))==3
-            silver_store.write_batch(df([frame([donation()],cmd=93102,offset=6)]),2,output)
+            silver_native.write_batch(df([frame([donation()],cmd=93102,offset=6)]),2,output)
             assert not rows('donations') and len(rows('quarantine'))==4
             print('Delta replay and quarantine-first crash recovery passed.',flush=True)
             from spark.bronze_to_silver import create_query, load_settings, writer_lock

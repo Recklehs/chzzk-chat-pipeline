@@ -226,10 +226,13 @@ def match_expression(fields):
 
 
 def merge_quarantine(spark, output_path, records):
-    from delta.tables import DeltaTable
     if not records:
         return
-    df = spark.createDataFrame(records, schemas()['quarantine'])
+    merge_quarantine_frame(spark, output_path, spark.createDataFrame(records, schemas()['quarantine']))
+
+
+def merge_quarantine_frame(spark, output_path, df):
+    from delta.tables import DeltaTable
     updates = {k: f'array_sort(array_distinct(concat(t.{k}, s.{k})))'
                for k in ('error_codes', 'error_fields', 'conflict_keys', 'related_sources')}
     updates['detected_at'] = 'least(t.detected_at, s.detected_at)'
@@ -269,7 +272,7 @@ def validate_bronze_source(batch, bronze_path=None):
         low, high = batch.agg(F.min('offset'), F.max('offset')).first()
         source = (batch.sparkSession.read.format('delta').load(bronze_path)
                   .filter(F.col('offset').between(low, high))
-                  .join(F.broadcast(batch.select(*coordinates).distinct()), coordinates, 'left_semi'))
+                  .join(batch.select(*coordinates).distinct(), coordinates, 'left_semi'))
     timestamp = 'kafka_timestamp' if 'kafka_timestamp' in source.columns else 'kafka_timestamp_ms'
     # DISTINCT includes NULL and omits ingested_at: replay may change ingestion time, never Kafka content.
     conflicts = (source.select(*coordinates, 'payload_json', 'channel_id', timestamp).distinct()
