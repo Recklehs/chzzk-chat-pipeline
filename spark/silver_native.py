@@ -423,8 +423,30 @@ def write_batch(batch, batch_id, output_path, bronze_path=None):
 
     # Checkpoints keep each later plan small: without them every lookup below would re-embed the whole parse
     # plan, and analyzing the unions of those copies exhausts the driver heap even for a one-row batch.
-    parsed = parse(batch, now).localCheckpoint()
-    return _reconcile_and_write(spark, parsed, batch, batch_id, output_path, now, totals)
+    before = set(local_checkpoints(spark))
+    try:
+        parsed = parse(batch, now).localCheckpoint()
+        return _reconcile_and_write(spark, parsed, batch, batch_id, output_path, now, totals)
+    finally:
+        release_checkpoints(spark, before)
+
+
+def local_checkpoints(spark):
+    """Ids of locally checkpointed RDDs still held in the block manager."""
+    return {int(i): rdd for i, rdd in spark.sparkContext._jsc.getPersistentRDDs().items()
+            if rdd.rdd().isLocallyCheckpointed()}
+
+
+def release_checkpoints(spark, keep):
+    """Drop this batch's checkpoints now: left to the cleaner they pile up across a long-running stream,
+    fill the block manager and lose task results (TaskResultLost), which stopped the stream once."""
+    jvm = spark.sparkContext._jvm
+    # Each release logs "cannot be recomputed after unpersisting"; nothing reads them after the batch.
+    jvm.org.apache.logging.log4j.core.config.Configurator.setLevel(
+        'org.apache.spark.rdd.MapPartitionsRDD', jvm.org.apache.logging.log4j.Level.ERROR)
+    for rdd_id, rdd in local_checkpoints(spark).items():
+        if rdd_id not in keep:
+            rdd.unpersist(False)
 
 
 def _reconcile_and_write(spark, parsed, batch, batch_id, output_path, now, totals):
@@ -444,16 +466,17 @@ def _reconcile_and_write(spark, parsed, batch, batch_id, output_path, now, total
     nodes_in = [records(incoming_rows[t], t, 0) for t in TABLES] + [records(incoming_quarantine, 'quarantine', 0)]
     incoming = reduce(lambda a, b: a.unionByName(b), nodes_in).localCheckpoint()
 
-    # Existing rows that share a source key or business key with the batch (load_matches).
+    # Existing rows that share a source key or business key with the batch (load_matches). No broadcast hints:
+    # the key sets grow with the batch, and a hint would collect them on the driver; Spark picks the join.
     stored = {t: spark.read.format('delta').load(f'{output_path}/{t}') for t in TABLES}
     source_keys = incoming.select(*SOURCE_KEY).distinct()
     business_keys = incoming.filter(F.col('biz_token').isNotNull()).select(F.col('biz_token').alias('_key')).distinct()
     existing_parts = []
     for t in TABLES:
         with_keys = stored[t].withColumn('_key', business_token(t))
-        matched = with_keys.join(F.broadcast(source_keys), list(SOURCE_KEY), 'left_semi')
+        matched = with_keys.join(source_keys, list(SOURCE_KEY), 'left_semi')
         if t in BUSINESS_KEYS:
-            matched = matched.unionByName(with_keys.join(F.broadcast(business_keys), '_key', 'left_semi'))
+            matched = matched.unionByName(with_keys.join(business_keys, '_key', 'left_semi'))
         existing_parts.append(records(matched.drop('_key').dropDuplicates(list(SOURCE_KEY)), t, 1))
     existing = reduce(lambda a, b: a.unionByName(b), existing_parts)
     all_records = incoming.unionByName(existing).localCheckpoint()
@@ -469,9 +492,9 @@ def _decide(spark, parsed, incoming_rows, incoming_quarantine, incoming, all_rec
     prior = spark.read.format('delta').load(quarantine_path)
     candidate_keys = (all_records.select(F.col('src_token').alias('_key'))
                       .unionByName(all_records.filter(F.col('biz_token').isNotNull()).select(F.col('biz_token').alias('_key'))).distinct())
-    direct = prior.join(F.broadcast(all_records.filter(F.col('origin') == 0).select(*SOURCE_KEY).distinct()), list(SOURCE_KEY), 'left_semi')
+    direct = prior.join(all_records.filter(F.col('origin') == 0).select(*SOURCE_KEY).distinct(), list(SOURCE_KEY), 'left_semi')
     linked = (prior.withColumn('_key', F.explode('conflict_keys'))
-              .join(F.broadcast(candidate_keys), '_key', 'left_semi').drop('_key'))
+              .join(candidate_keys, '_key', 'left_semi').drop('_key'))
     prior_matched = direct.unionByName(linked).dropDuplicates([*SOURCE_KEY, 'parser_version'])
 
     # Seeds: (key, code) pairs that start the poisoning walk.

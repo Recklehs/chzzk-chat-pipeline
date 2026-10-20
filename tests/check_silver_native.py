@@ -1,5 +1,7 @@
 """Native Silver must equal the Python reference: JAVA_HOME=<JDK17> python tests/check_silver_native.py [--real].
 
+Runs at Spark's default 1g driver memory on purpose: --real then proves a whole-Bronze backlog fits.
+
 1. parse: thousands of synthetic frames, one field broken at a time, through parse_frame and silver_native.parse.
 2. write: batch sequences with duplicates, replays, conflicts and earlier quarantine through both write_batch.
 3. --real: native over the local Bronze, compared with the Silver the reference already built from it.
@@ -38,7 +40,6 @@ def spark_session():
     builder = (SparkSession.builder.master('local[4]').appName('check-silver-native')
                .config('spark.ui.enabled', 'false').config('spark.sql.shuffle.partitions', '4')
                .config('spark.sql.session.timeZone', 'UTC').config('spark.databricks.delta.snapshotPartitions', '2')
-               .config('spark.driver.memory', '6g')
                .config('spark.sql.extensions', 'io.delta.sql.DeltaSparkSessionExtension')
                .config('spark.sql.catalog.spark_catalog', 'org.apache.spark.sql.delta.catalog.DeltaCatalog'))
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
@@ -260,6 +261,7 @@ def scenarios():
 
 def check_write(spark):
     from spark import silver_native, silver_store
+    held = len(silver_native.local_checkpoints(spark))
     for name, batches in scenarios():
         with TemporaryDirectory() as root:
             for implementation, output in ((silver_store, root + '/reference'), (silver_native, root + '/native')):
@@ -267,6 +269,33 @@ def check_write(spark):
                     implementation.write_batch(spark.createDataFrame(batch, FRAME_SCHEMA), batch_id, output)
             expected, actual = tables(spark, root + '/reference'), tables(spark, root + '/native')
             report(f'write:{name}', expected, actual, batches=len(batches))
+            leaked = len(silver_native.local_checkpoints(spark)) - held
+            assert leaked == 0, f'write:{name}: {leaked} checkpointed RDDs left in the block manager'
+
+
+def pinned_snapshot(frames_root):
+    """Bronze version and Silver time of the last committed Silver batch, so a running stream cannot skew the diff.
+
+    The batch's end offset names the first Bronze version it did not read; its commit file is written after the
+    batch's table writes and before the next batch starts, so Silver as of that file's time is that batch's result.
+    """
+    checkpoint = Path(frames_root) / 'silver_checkpoint'
+    batch = max(int(p.name) for p in (checkpoint / 'commits').iterdir() if p.name.isdigit())
+    offset = json.loads((checkpoint / 'offsets' / str(batch)).read_text().splitlines()[-1])
+    version = offset['reservoirVersion'] - (1 if offset['index'] == -1 else 0)
+    if offset['index'] != -1:
+        raise AssertionError('Silver stopped inside a Bronze version; rerun after its next batch')
+    committed = datetime.fromtimestamp((checkpoint / 'commits' / str(batch)).stat().st_mtime, timezone.utc)
+    return version, committed.strftime('%Y-%m-%d %H:%M:%S.%f')
+
+
+def version_at(spark, path, timestamp):
+    """The table as of `timestamp`; timestampAsOf refuses a time after the last commit of a quiet table."""
+    from delta.tables import DeltaTable
+    from pyspark.sql import functions as F
+    version = (DeltaTable.forPath(spark, path).history().filter(F.col('timestamp') <= F.lit(timestamp).cast('timestamp'))
+               .agg(F.max('version')).first()[0])
+    return spark.read.format('delta').option('versionAsOf', version).load(path)
 
 
 def check_real(spark, frames_root):
@@ -276,14 +305,16 @@ def check_real(spark, frames_root):
     """
     from spark import silver_native
     from spark.silver_parser import TABLES
-    bronze = spark.read.format('delta').load(f'{frames_root}/bronze')
+    bronze_version, silver_as_of = pinned_snapshot(frames_root)
+    bronze = spark.read.format('delta').option('versionAsOf', bronze_version).load(f'{frames_root}/bronze')
+    print(f'real: Bronze version {bronze_version}, Silver as of {silver_as_of}', flush=True)
     with TemporaryDirectory() as root:
         started = time.time()
         totals = silver_native.write_batch(bronze, 0, root + '/native', f'{frames_root}/bronze')
         print(f'real: native processed {totals["frames"]} frames in {time.time() - started:.0f}s', flush=True)
         problems = 0
         for table in (*TABLES, 'quarantine'):
-            expected = spark.read.format('delta').load(f'{frames_root}/silver/{table}')
+            expected = version_at(spark, f'{frames_root}/silver/{table}', silver_as_of)
             actual = spark.read.format('delta').load(f'{root}/native/{table}')
             columns = [c for c in expected.columns if c not in EXCLUDED]
             expected, actual = expected.select(*columns), actual.select(*columns)
