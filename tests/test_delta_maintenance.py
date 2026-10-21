@@ -78,6 +78,10 @@ def test_build_cron_entry_uses_workspace_python_and_logfile():
     assert str(PROJECT_ROOT / "spark" / "delta_maintenance.py") in entry
     assert str(PROJECT_ROOT / "data" / "logs" / "delta_maintenance.log") in entry
     assert module.CRON_MARKER in entry
+    assert "SPARK_JAVA_HOME" not in entry
+    assert "&& SPARK_JAVA_HOME=/opt/jdk17 " in module.build_cron_entry(PROJECT_ROOT, hour=3, minute=0, java_home="/opt/jdk17")
+    pinned = module.build_cron_entry(PROJECT_ROOT, hour=3, minute=0, properties_file=Path("custom.properties"))
+    assert f"delta_maintenance.py --properties-file {Path('custom.properties').resolve()} run " in pinned
 
 
 def test_upsert_cron_entry_adds_or_replaces_single_managed_entry():
@@ -95,38 +99,71 @@ def test_upsert_cron_entry_adds_or_replaces_single_managed_entry():
     assert second in replaced
 
 
-def test_apply_table_maintenance_sets_retention_and_vacuums_each_table():
+def test_apply_table_maintenance_sets_changed_retention_and_vacuums_each_table():
     module = load_module()
 
     class FakeSpark:
-        def __init__(self):
+        def __init__(self, properties):
+            self.properties = properties
             self.queries = []
 
         def sql(self, query):
             self.queries.append(query)
             return self
 
-    spark = FakeSpark()
-    main_table = Path("/tmp/main-table").resolve()
-    dead_letter = Path("/tmp/dead-letter").resolve()
+        def first(self):
+            return {"properties": self.properties[self.queries[-1].split("`")[1]]}
+
+    silver = Path("/tmp/silver-table").resolve()
+    gold = Path("/tmp/gold-table").resolve()
+    spark = FakeSpark({
+        str(silver): {
+            "delta.deletedFileRetentionDuration": "interval 7 days",
+            "delta.logRetentionDuration": "interval 30 days",
+        },
+        str(gold): {},
+    })
 
     module.apply_table_maintenance(
         spark,
         [
-            main_table,
-            dead_letter,
+            (silver, "interval 7 days", "interval 30 days"),
+            (gold, "interval 1 days", "interval 1 days"),
         ],
-        deleted_file_retention="interval 7 days",
-        log_retention="interval 30 days",
     )
 
     assert spark.queries == [
-        f"ALTER TABLE delta.`{main_table}` SET TBLPROPERTIES ("
-        "'delta.deletedFileRetentionDuration' = 'interval 7 days', "
-        "'delta.logRetentionDuration' = 'interval 30 days')",
-        f"VACUUM delta.`{main_table}`",
-        f"ALTER TABLE delta.`{dead_letter}` SET TBLPROPERTIES ("
-        "'delta.deletedFileRetentionDuration' = 'interval 7 days', "
-        "'delta.logRetentionDuration' = 'interval 30 days')",
-        f"VACUUM delta.`{dead_letter}`",
+        f"DESCRIBE DETAIL delta.`{silver}`",
+        f"VACUUM delta.`{silver}`",
+        f"DESCRIBE DETAIL delta.`{gold}`",
+        f"ALTER TABLE delta.`{gold}` SET TBLPROPERTIES ("
+        "'delta.deletedFileRetentionDuration' = 'interval 1 days', "
+        "'delta.logRetentionDuration' = 'interval 1 days')",
+        f"VACUUM delta.`{gold}`",
+    ]
+
+
+def test_default_tables_follow_frame_layout_with_short_gold_retention(tmp_path):
+    module = load_module()
+    frames = tmp_path / "frames"
+    for table in ("bronze", "silver/chat_messages", "silver/donations", "gold/broadcast_sessions"):
+        (frames / table / "_delta_log").mkdir(parents=True)
+    (frames / "silver_v3_1" / "chat_messages" / "_delta_log").mkdir(parents=True)
+    properties = tmp_path / "local.properties"
+    properties.write_text(
+        "app.kafka.bootstrap.servers=localhost:9092\n"
+        "app.kafka.topic=chzzk.events.raw\n"
+        "app.kafka.startingOffsets=earliest\n"
+        f"app.bucket.uri={frames}\n",
+        encoding="utf-8",
+    )
+
+    tables = module.default_tables(properties)
+
+    keep = ("interval 7 days", "interval 30 days")
+    assert tables == [
+        (frames / "bronze", *keep),
+        (frames / "silver" / "chat_messages", *keep),
+        (frames / "silver" / "donations", *keep),
+        (frames / "gold" / "broadcast_sessions", "interval 1 days", "interval 1 days"),
     ]
