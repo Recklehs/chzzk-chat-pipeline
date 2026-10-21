@@ -167,6 +167,7 @@ def small_frame(spark, rows, schema):
     """DataFrame from a few dict rows via Arrow, which the JVM reads directly.
 
     A plain list goes through a Python worker per default partition, so every refresh kept local[*] workers alive.
+    Timestamps must be timezone-aware: Arrow reads a naive datetime as UTC, the list path as the session time zone.
     """
     import pyarrow as pa
     from pyspark.sql.pandas.types import to_arrow_schema
