@@ -163,10 +163,23 @@ def replace_conditions(session_ids, ranges):
     return minutes or None, f'session_id IN ({ids})' if ids else None
 
 
+def small_frame(spark, rows, schema):
+    """DataFrame from a few dict rows via Arrow, which the JVM reads directly.
+
+    A plain list goes through a Python worker per default partition, so every refresh kept local[*] workers alive.
+    Timestamps must be timezone-aware: Arrow reads a naive datetime as UTC, the list path as the session time zone.
+    """
+    import pyarrow as pa
+    from pyspark.sql.pandas.types import to_arrow_schema
+    from pyspark.sql.types import StructType
+    struct = StructType.fromDDL(schema)
+    return spark.createDataFrame(pa.Table.from_pylist(rows, schema=to_arrow_schema(struct)), struct)
+
+
 def assign_sessions(spark, events, sessions):
     """Left-join events to the session whose [started_at, effective_end) holds their event_time."""
     from pyspark.sql import functions as F
-    windows = F.broadcast(spark.createDataFrame(sessions, SESSION_SCHEMA).select(
+    windows = F.broadcast(small_frame(spark, sessions, SESSION_SCHEMA).select(
         F.col('session_id'), F.col('channel_id').alias('s_channel'), 'broadcast_date_kst', 'started_at', 'effective_end'))
     joined = events.join(windows, (events.channel_id == F.col('s_channel'))
                          & (events.event_time >= F.col('started_at')) & (events.event_time < F.col('effective_end')), 'left')
@@ -203,7 +216,8 @@ def tagged_events(spark, silver_path, sessions, versions=None, windows=None):
         df = df.select('channel_id', 'event_time', *extra[table])
         events = df if events is None else events.unionByName(df, allowMissingColumns=True)
     if windows:
-        scope = F.broadcast(spark.createDataFrame(windows, 'w_channel string, w_start timestamp, w_end timestamp'))
+        scope = F.broadcast(small_frame(spark, [dict(zip(('w_channel', 'w_start', 'w_end'), w)) for w in windows],
+                                        'w_channel string, w_start timestamp, w_end timestamp'))
         events = events.join(scope, (events.channel_id == scope.w_channel) & (events.event_time >= scope.w_start)
                              & (events.event_time < scope.w_end), 'left_semi')
     return assign_sessions(spark, events.fillna(0, subset=list(COUNTS)), sessions)
@@ -222,7 +236,7 @@ def broadcast_sessions(spark, minutes, sessions):
     from pyspark.sql import Window, functions as F
     seconds = lambda c: F.unix_micros(c) / 1e6
     minute_index = lambda c: F.floor(F.unix_micros(c) / MINUTE_US)
-    spans = (spark.createDataFrame(sessions, SESSION_SCHEMA)
+    spans = (small_frame(spark, sessions, SESSION_SCHEMA)
              .withColumn('first_minute', minute_index('started_at'))
              .withColumn('last_minute', minute_index(F.col('effective_end') - F.expr('INTERVAL 1 MICROSECOND'))))
     in_session = (minutes.filter(F.col('session_id').isNotNull())
