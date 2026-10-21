@@ -11,6 +11,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 DEFAULT_DELETED_FILE_RETENTION = "interval 7 days"
 DEFAULT_LOG_RETENTION = "interval 30 days"
+# Gold rewrites its rows every trigger and can be rebuilt with `silver_to_gold.py --full`, so a week of replaced
+# files buys nothing. Bronze and Silver keep the defaults: Silver and Gold stream checkpoints point at their versions.
+GOLD_DELETED_FILE_RETENTION = "interval 1 days"
+GOLD_LOG_RETENTION = "interval 1 days"
+DEFAULT_PROPERTIES_FILE = Path("spark") / "conf" / "local.properties"
 DEFAULT_CRON_HOUR = 3
 DEFAULT_CRON_MINUTE = 0
 CRON_MARKER = "# chzzk-delta-vacuum"
@@ -22,10 +27,24 @@ def project_root_from_path(path: str | Path | None = None) -> Path:
     return Path(path).resolve()
 
 
-def default_table_paths(project_root: Path) -> list[Path]:
+def delta_tables(*roots: str | Path) -> list[Path]:
+    """Delta tables among `roots` themselves and their direct children."""
+    tables = []
+    for root in map(Path, roots):
+        candidates = [root, *sorted(child for child in root.iterdir() if child.is_dir())] if root.is_dir() else []
+        tables += [path for path in candidates if (path / "_delta_log").is_dir()]
+    return tables
+
+
+def default_tables(properties_file: str | Path) -> list[tuple[Path, str, str]]:
+    """Frame Bronze, Silver and Gold tables from the job properties, with each layer's retention."""
+    from spark.silver_to_gold import load_settings
+
+    settings = load_settings(["--properties-file", str(properties_file)])
+    keep = (DEFAULT_DELETED_FILE_RETENTION, DEFAULT_LOG_RETENTION)
     return [
-        project_root / "data" / "output" / "chat_bdy_stream",
-        project_root / "data" / "output" / "dead_letter" / "chat_bdy_stream",
+        *((path, *keep) for path in delta_tables(settings.silver.bronze_path, settings.silver.output_path)),
+        *((path, GOLD_DELETED_FILE_RETENTION, GOLD_LOG_RETENTION) for path in delta_tables(settings.gold_path)),
     ]
 
 
@@ -119,33 +138,40 @@ def build_vacuum_sql(
 
 def apply_table_maintenance(
     spark,
-    table_paths: list[Path],
+    tables: list[tuple[Path, str, str]],
     *,
-    deleted_file_retention: str = DEFAULT_DELETED_FILE_RETENTION,
-    log_retention: str = DEFAULT_LOG_RETENTION,
     vacuum_retain_hours: int | None = None,
     dry_run: bool = False,
 ) -> None:
-    for table_path in table_paths:
-        spark.sql(
-            build_retention_sql(
-                table_path,
-                deleted_file_retention=deleted_file_retention,
-                log_retention=log_retention,
+    for table_path, deleted_file_retention, log_retention in tables:
+        properties = spark.sql(f"DESCRIBE DETAIL delta.`{Path(table_path).resolve()}`").first()["properties"]
+        # A property change is a metadata commit that fails the running streams' concurrent writes, so only
+        # set the properties when they differ.
+        if (
+            properties.get("delta.deletedFileRetentionDuration") != deleted_file_retention
+            or properties.get("delta.logRetentionDuration") != log_retention
+        ):
+            spark.sql(
+                build_retention_sql(
+                    table_path,
+                    deleted_file_retention=deleted_file_retention,
+                    log_retention=log_retention,
+                )
             )
-        )
-        spark.sql(
+        result = spark.sql(
             build_vacuum_sql(
                 table_path,
                 vacuum_retain_hours=vacuum_retain_hours,
                 dry_run=dry_run,
             )
         )
+        if dry_run:
+            print(f"{table_path}: {result.count()} files to delete", flush=True)
 
 
 def run_maintenance(
     *,
-    project_root: Path,
+    properties_file: Path,
     table_paths: list[Path] | None = None,
     deleted_file_retention: str = DEFAULT_DELETED_FILE_RETENTION,
     log_retention: str = DEFAULT_LOG_RETENTION,
@@ -156,17 +182,24 @@ def run_maintenance(
     configure_spark_java()
 
     if spark_factory is None:
-        from spark.kafka_raw_to_bronze import create_spark_session
+        from spark.kafka_raw_to_bronze import create_spark_session, load_runtime_settings
 
-        spark_factory = create_spark_session
+        def spark_factory():
+            settings = load_runtime_settings(["--properties-file", str(properties_file)])
+            return create_spark_session(settings, kafka=False)
+
+    if table_paths:
+        tables = [(path, deleted_file_retention, log_retention) for path in table_paths]
+    else:
+        tables = default_tables(properties_file)
+    if not tables:
+        raise RuntimeError(f"No Delta tables found for {properties_file}.")
 
     spark = spark_factory()
     try:
         apply_table_maintenance(
             spark,
-            table_paths or default_table_paths(project_root),
-            deleted_file_retention=deleted_file_retention,
-            log_retention=log_retention,
+            tables,
             vacuum_retain_hours=vacuum_retain_hours,
             dry_run=dry_run,
         )
@@ -174,14 +207,16 @@ def run_maintenance(
         spark.stop()
 
 
-def build_cron_entry(project_root: Path, *, hour: int, minute: int) -> str:
+def build_cron_entry(project_root: Path, *, hour: int, minute: int, java_home: str | None = None) -> str:
     root = project_root.resolve()
     python_bin = root / ".venv" / "bin" / "python"
     script_path = root / "spark" / "delta_maintenance.py"
     log_path = root / "data" / "logs" / "delta_maintenance.log"
+    # cron starts without the shell's JAVA_HOME, so pin the JDK found when the entry is installed.
+    java_env = f"SPARK_JAVA_HOME={shlex.quote(java_home)} " if java_home else ""
     command = (
         f"cd {shlex.quote(str(root))} && "
-        f"{shlex.quote(str(python_bin))} {shlex.quote(str(script_path))} run "
+        f"{java_env}{shlex.quote(str(python_bin))} {shlex.quote(str(script_path))} run "
         f">> {shlex.quote(str(log_path))} 2>&1"
     )
     return f"{minute} {hour} * * * {command} {CRON_MARKER}"
@@ -211,7 +246,7 @@ def read_existing_crontab() -> str:
 def install_cron_entry(project_root: Path, *, hour: int, minute: int) -> str:
     log_dir = project_root / "data" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    entry = build_cron_entry(project_root, hour=hour, minute=minute)
+    entry = build_cron_entry(project_root, hour=hour, minute=minute, java_home=choose_java_home())
     updated = upsert_cron_entry(read_existing_crontab(), entry)
     subprocess.run(
         ["crontab", "-"],
@@ -227,7 +262,11 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument(
         "--project-root",
         default=str(project_root_from_path()),
-        help="Absolute project root for default Delta table paths.",
+        help="Absolute project root for the cron entry and the default properties file.",
+    )
+    parser.add_argument(
+        "--properties-file",
+        help=f"Job properties that locate the frame tables. Defaults to <project-root>/{DEFAULT_PROPERTIES_FILE}.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -236,17 +275,17 @@ def parse_args(argv: list[str] | None = None):
         "--table-path",
         action="append",
         dest="table_paths",
-        help="Delta table path to maintain. Repeat to add multiple tables.",
+        help="Delta table path to maintain instead of the frame tables. Repeat to add multiple tables.",
     )
     run_parser.add_argument(
         "--deleted-file-retention",
         default=DEFAULT_DELETED_FILE_RETENTION,
-        help="delta.deletedFileRetentionDuration value.",
+        help="delta.deletedFileRetentionDuration for --table-path tables.",
     )
     run_parser.add_argument(
         "--log-retention",
         default=DEFAULT_LOG_RETENTION,
-        help="delta.logRetentionDuration value.",
+        help="delta.logRetentionDuration for --table-path tables.",
     )
     run_parser.add_argument(
         "--vacuum-retain-hours",
@@ -277,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         table_paths = [Path(path).resolve() for path in args.table_paths] if args.table_paths else None
         run_maintenance(
-            project_root=project_root,
+            properties_file=Path(args.properties_file or project_root / DEFAULT_PROPERTIES_FILE).resolve(),
             table_paths=table_paths,
             deleted_file_retention=args.deleted_file_retention,
             log_retention=args.log_retention,
@@ -287,7 +326,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "print-cron":
-        print(build_cron_entry(project_root, hour=args.hour, minute=args.minute))
+        print(build_cron_entry(project_root, hour=args.hour, minute=args.minute, java_home=choose_java_home()))
         return 0
 
     if args.command == "install-cron":

@@ -327,6 +327,22 @@ Gold가 `Sessions … overlap` 또는 `… ends before it starts` 오류로 멈�
 - 대시보드에는 인증이 없고 채널별 채팅·후원 통계를 그대로 보여줍니다. 위 명령은 `127.0.0.1`에만 열리므로, 다른 컴퓨터에서 보려고 `--host 0.0.0.0`으로 열 때는 앞단에 인증이 있는 프록시를 두세요.
 - 대시보드 의존성(`deltalake` 등)은 `requirements-dashboard.txt`에 있습니다. `requirements.txt`가 함께 설치하며, Collector Docker 이미지에는 들어가지 않습니다.
 
+8. Delta 옛 파일 정리를 예약합니다. Delta는 행을 다시 쓸 때 교체된 파일을 바로 지우지 않으므로, `VACUUM`을 따로 돌려야 디스크가 줄어듭니다. `spark/delta_maintenance.py`는 properties의 경로로 프레임 Bronze·Silver·Gold 테이블을 찾아 보존 기간을 맞추고 `VACUUM`합니다.
+
+```bash
+export JAVA_HOME="$(brew --prefix openjdk@17)/libexec/openjdk.jdk/Contents/Home"
+.venv/bin/python spark/delta_maintenance.py run --dry-run   # 보존 기간을 맞추고, 지울 파일 목록만 출력
+.venv/bin/python spark/delta_maintenance.py install-cron    # 매일 03:00 실행 등록
+crontab -l | grep chzzk-delta-vacuum                         # 등록 확인
+```
+
+- cron은 셸의 `JAVA_HOME`을 물려받지 않으므로 `install-cron`이 등록할 때 찾은 JDK를 `SPARK_JAVA_HOME`으로 항목에 넣습니다. JDK를 바꾸면 다시 등록하세요. macOS에서 저장소가 `~/Desktop`·`~/Documents` 아래에 있으면 `/usr/sbin/cron`에 전체 디스크 접근 권한을 줘야 cron이 파일을 읽을 수 있습니다.
+
+- 보존 기간: Bronze·Silver는 지운 파일 7일·로그 30일, Gold는 둘 다 1일입니다. Gold는 10초마다 행을 다시 쓰고 `--full`로 다시 만들 수 있어 길게 보존할 이유가 없습니다. Silver와 Gold의 스트림 체크포인트가 각각 Bronze·Silver 버전을 가리키므로, 스트림을 7일 넘게 멈출 계획이 아니라면 Bronze·Silver 보존 기간을 줄이지 마세요.
+- 기본 설정 파일은 `spark/conf/local.properties`이고 `--properties-file`로 바꿀 수 있습니다. 상대 경로를 쓰므로 저장소 루트에서 실행합니다(cron 항목은 루트로 이동한 뒤 실행합니다). 실행 로그는 `data/logs/delta_maintenance.log`입니다.
+- 보존 기간 속성은 값이 다를 때만 바꿉니다. 속성 변경은 메타데이터 커밋이라 그 순간 실행 중인 스트림의 쓰기와 충돌할 수 있으므로, 처음 한 번은 스트림을 멈춘 상태에서 실행하는 편이 안전합니다.
+- 다른 테이블만 정리하려면 `run --table-path <경로>`를 반복해 지정합니다. 이때는 `--deleted-file-retention`, `--log-retention` 값이 적용됩니다.
+
 ### 선택 사항: Pub/Sub emulator + collector
 
 로컬에서 Pub/Sub 경로를 확인하려면 아래 순서로 실행합니다.
