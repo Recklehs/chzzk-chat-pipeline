@@ -85,12 +85,15 @@ def main():
             assert (busy.donation_count,busy.anonymous_donation_count,busy.donation_amount_currency,busy.other_pay_type_donation_count)==(2,2,1000,1), busy
             sessions={r.session_id:r for r in table('broadcast_sessions').collect()}
             one,two,three=sessions[1],sessions[2],sessions[3]
-            assert (one.chat_count,one.unique_chatters,one.donation_amount_currency)==(4,2,1000), one
-            assert one.data_status=='CHECK_GAP' and 19<one.max_gap_minutes<20, one
+            assert (one.chat_count,one.donation_amount_currency)==(4,1000), one
+            assert (one.first_event_at,one.last_event_at)==(utc(MS-10_000),utc(MS+20*MINUTE)), one
+            # Minutes 23:59 … 00:24 KST; 00:01 … 00:19 hold no event, the same 19 minutes the dashboard shades.
+            assert one.data_status=='CHECK_GAP' and one.max_gap_minutes==19, one
+            assert 'unique_chatters' not in table('broadcast_sessions').columns
             assert (one.peak_minute_start,one.peak_minute_chat_count,one.active_minutes)==(utc(MS),2,3), one
             assert one.broadcast_date_kst==date(2026,9,22)
             assert two.data_status=='NO_DATA' and two.ended_at is None and two.duration_minutes==30, two
-            assert three.data_status=='OK' and three.chat_count==6 and three.unique_chatters==1, three
+            assert three.data_status=='OK' and three.chat_count==6 and three.max_gap_minutes==0, three
             print('Gold session boundaries, metric definitions and data status passed.',flush=True)
             def snapshot(path):
                 return {name:sorted(map(repr,spark.read.format('delta').load(f'{path}/{name}').collect()))
@@ -106,6 +109,9 @@ def main():
             try:
                 query.processAllAvailable()
                 matches_full('the first batch')
+                # A timer trigger without new events or Collector changes rewrites the live session's row only.
+                manifest=refresh(spark,silver_path,gold_path,db,now=NOW)
+                assert (manifest['refreshed_channels'],manifest['refreshed_sessions'])==([],[2]), manifest
                 # A late chat for ended session 1, one more chat in session 3, a chat between sessions 1 and 2,
                 # and a chat in ongoing session 2 that a later Collector end time will leave outside the session.
                 silver([at(MS+5*MINUTE,message(msgTime=MS+5*MINUTE,uid='u3',profile=None)),
@@ -154,6 +160,12 @@ def main():
             assert (one.donation_count,one.donation_amount_currency)==(1,0), one
             assert table('channel_minute_activity').groupBy('channel_id','minute_start','session_id').count().filter('count > 1').count()==0
             print('Silver deletes do not stop the stream, and --full reconciles them without duplicate rows.',flush=True)
+            # Minute rows from before session rows were built from them lack event times; the next refresh rebuilds all.
+            (table('channel_minute_activity').drop('first_event_at','last_event_at').write.format('delta').mode('overwrite')
+             .option('overwriteSchema','true').save(f'{gold_path}/channel_minute_activity'))
+            assert refresh(spark,silver_path,gold_path,db,now=NOW)['mode']=='full'
+            assert 'last_event_at' in table('channel_minute_activity').columns
+            print('Gold written by the previous layout is rebuilt in full once.',flush=True)
     finally:spark.stop()
 
 

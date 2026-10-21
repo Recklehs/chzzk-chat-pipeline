@@ -21,7 +21,7 @@ def gold(tmp_path, computed_at=at(11, 0)):
     sessions = [
         {'session_id': 1, 'channel_id': 'a', 'channel_name': 'one', 'started_at': at(10, 0, 30), 'ended_at': at(10, 15),
          'stop_reason': 'BROADCAST_ENDED', 'broadcast_date_kst': date(2026, 9, 22), 'chat_count': 3,
-         'duration_minutes': 14.5, 'data_status': 'CHECK_GAP', 'max_gap_minutes': 13.5},
+         'duration_minutes': 14.5, 'data_status': 'CHECK_GAP', 'max_gap_minutes': 13.0},
         {'session_id': 2, 'channel_id': 'b', 'channel_name': 'two', 'started_at': at(10, 50), 'ended_at': None,
          'stop_reason': None, 'broadcast_date_kst': date(2026, 9, 22), 'chat_count': 0,
          'duration_minutes': 10.0, 'data_status': 'NO_DATA', 'max_gap_minutes': 10.0},

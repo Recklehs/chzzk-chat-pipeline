@@ -1,6 +1,7 @@
 """Silver Delta + Collector sessions -> two Gold Delta tables.
 
-Default: a stream that recomputes only the sessions touched since the last trigger.
+Default: a stream that rewrites only the minutes touched since the last trigger and rebuilds the sessions
+holding them from minute rows.
 --full: recompute everything from a pinned Silver snapshot (first build, reconciliation).
 """
 import argparse
@@ -116,20 +117,19 @@ def record(session):
 
 
 def changed_sessions(sessions, stored):
-    """Sessions Gold must refresh without new events: ongoing, new, or with a changed Collector record."""
-    return {s['session_id'] for s in sessions
-            if s['ended_at'] is None or stored.get(s['session_id'], {}).get('record') != record(s)}
+    """Sessions whose minutes Gold must rebuild without new events: new, or with a changed Collector record."""
+    return {s['session_id'] for s in sessions if stored.get(s['session_id'], {}).get('record') != record(s)}
 
 
-def widen_loose(loose, sessions, affected, stored):
-    """Add each rewritten session's span to the session-less minute ranges that get rewritten too.
+def widen_ranges(ranges, sessions, rebuilt, stored):
+    """Add each rebuilt session's span to the per-channel minute ranges that get rewritten.
 
     A changed start, end or channel moves events between a session and no session. The span is stretched to
     the session's previously stored first/last event, on both its current and stored channel, so both sides
     are rewritten and every event is counted once.
     """
     for s in sessions:
-        if s['session_id'] not in affected:
+        if s['session_id'] not in rebuilt:
             continue
         previous = stored.get(s['session_id'], {})
         first, last = previous.get('events', (None, None))
@@ -137,27 +137,30 @@ def widen_loose(loose, sessions, affected, stored):
         high = max(v for v in (micros(s['effective_end']) - 1, last, low) if v is not None)
         low, high = low - low % MINUTE_US, high - high % MINUTE_US
         for channel in {s['channel_id'], previous.get('record', (s['channel_id'],))[0]}:
-            old = loose.get(channel)
-            loose[channel] = (min(low, old[0]), max(high, old[1])) if old else (low, high)
-    return loose
+            old = ranges.get(channel)
+            ranges[channel] = (min(low, old[0]), max(high, old[1])) if old else (low, high)
+    return ranges
 
 
-def replace_conditions(session_ids, loose):
+def overlapping(sessions, ranges):
+    """Sessions with a minute inside a rewritten range; their rows are rebuilt from the new minute rows."""
+    return {s['session_id'] for s in sessions if s['channel_id'] in ranges
+            and micros(s['started_at']) < ranges[s['channel_id']][1] + MINUTE_US
+            and micros(s['effective_end']) > ranges[s['channel_id']][0]}
+
+
+def replace_conditions(session_ids, ranges):
     """Delta replaceWhere predicates for the rows one incremental refresh rewrites.
 
-    `loose` maps channel -> (first, last) minute in epoch micros; every session-less row in that range is rewritten.
+    `ranges` maps channel -> (first, last) minute in epoch micros; every row of that channel in the range is rewritten.
     """
-    for channel in loose:
+    for channel in ranges:
         if not CHANNEL_ID.fullmatch(channel):
             raise ValueError(f'Unexpected channel_id {channel!r}')
     ids = ', '.join(str(int(i)) for i in sorted(session_ids))
-    sessions = f'session_id IN ({ids})' if ids else None
-    loose = ' OR '.join(f"(channel_id = '{c}' AND minute_start BETWEEN timestamp_micros({int(lo)}) AND timestamp_micros({int(hi)}))"
-                        for c, (lo, hi) in sorted(loose.items()))
-    parts = [sessions] if sessions else []
-    if loose:
-        parts.append(f'(session_id IS NULL AND ({loose}))')
-    return ' OR '.join(parts) or None, sessions
+    minutes = ' OR '.join(f"(channel_id = '{c}' AND minute_start BETWEEN timestamp_micros({int(lo)}) AND timestamp_micros({int(hi)}))"
+                          for c, (lo, hi) in sorted(ranges.items()))
+    return minutes or None, f'session_id IN ({ids})' if ids else None
 
 
 def assign_sessions(spark, events, sessions):
@@ -210,38 +213,45 @@ def minute_activity(events):
     from pyspark.sql import functions as F
     return (events.withColumn('minute_start', F.date_trunc('minute', 'event_time'))
             .groupBy('channel_id', 'minute_start', 'session_id', 'broadcast_date_kst')
-            .agg(*[F.sum(c).cast('long').alias(c) for c in COUNTS], F.countDistinct('chatter').alias('unique_chatters')))
+            .agg(*[F.sum(c).cast('long').alias(c) for c in COUNTS], F.countDistinct('chatter').alias('unique_chatters'),
+                 F.min('event_time').alias('first_event_at'), F.max('event_time').alias('last_event_at')))
 
 
-def broadcast_sessions(spark, events, minutes, sessions):
+def broadcast_sessions(spark, minutes, sessions):
+    """Session rows built from minute rows alone, so a refresh never has to reread a session's Silver events."""
     from pyspark.sql import Window, functions as F
     seconds = lambda c: F.unix_micros(c) / 1e6
-    in_session = events.filter(F.col('session_id').isNotNull())
-    # Gap before each event, counting from the session start for the first one.
-    previous = F.coalesce(F.lag('event_time').over(Window.partitionBy('session_id').orderBy('event_time')), F.col('started_at'))
-    totals = (in_session.withColumn('gap_minutes', (seconds('event_time') - seconds(previous)) / 60)
+    minute_index = lambda c: F.floor(F.unix_micros(c) / MINUTE_US)
+    spans = (spark.createDataFrame(sessions, SESSION_SCHEMA)
+             .withColumn('first_minute', minute_index('started_at'))
+             .withColumn('last_minute', minute_index(F.col('effective_end') - F.expr('INTERVAL 1 MICROSECOND'))))
+    in_session = (minutes.filter(F.col('session_id').isNotNull())
+                  .join(spans.select('session_id', 'first_minute'), 'session_id')
+                  .withColumn('minute', minute_index('minute_start')))
+    # Empty minutes before each event minute, counting from the session's first minute for the first one.
+    previous = F.coalesce(F.lag('minute').over(Window.partitionBy('session_id').orderBy('minute')), F.col('first_minute') - 1)
+    totals = (in_session.withColumn('empty_before', F.col('minute') - previous - 1)
               .groupBy('session_id')
-              .agg(*[F.sum(c).cast('long').alias(c) for c in COUNTS], F.countDistinct('chatter').alias('unique_chatters'),
-                   F.min('event_time').alias('first_event_at'), F.max('event_time').alias('last_event_at'),
-                   F.max('gap_minutes').alias('max_inner_gap_minutes')))
+              .agg(*[F.sum(c).cast('long').alias(c) for c in COUNTS], F.count('*').alias('active_minutes'),
+                   F.min('first_event_at').alias('first_event_at'), F.max('last_event_at').alias('last_event_at'),
+                   F.max('minute').alias('last_event_minute'), F.max('empty_before').alias('max_inner_gap')))
     ranked = Window.partitionBy('session_id').orderBy(F.desc('chat_count'), 'minute_start')
     peaks = (minutes.filter(F.col('session_id').isNotNull() & (F.col('chat_count') > 0))
              .withColumn('rank', F.row_number().over(ranked)).filter('rank = 1')
              .select('session_id', F.col('minute_start').alias('peak_minute_start'),
                      F.col('chat_count').alias('peak_minute_chat_count')))
-    active = minutes.filter(F.col('session_id').isNotNull()).groupBy('session_id').agg(F.count('*').alias('active_minutes'))
     duration = (seconds('effective_end') - seconds('started_at')) / 60
-    max_gap = F.when(F.col('last_event_at').isNull(), duration).otherwise(
-        F.greatest(F.col('max_inner_gap_minutes'), (seconds('effective_end') - seconds('last_event_at')) / 60))
-    result = (spark.createDataFrame(sessions, SESSION_SCHEMA)
-              .join(totals, 'session_id', 'left').join(peaks, 'session_id', 'left').join(active, 'session_id', 'left')
-              .fillna(0, subset=[*COUNTS, 'unique_chatters', 'active_minutes'])
+    # The longest run of calendar minutes with no event, the same runs the dashboard shades as gaps.
+    max_gap = F.when(F.col('last_event_at').isNull(), F.greatest(F.col('last_minute') - F.col('first_minute') + 1, F.lit(0))).otherwise(
+        F.greatest(F.col('max_inner_gap'), F.col('last_minute') - F.col('last_event_minute')))
+    result = (spans.join(totals, 'session_id', 'left').join(peaks, 'session_id', 'left')
+              .fillna(0, subset=[*COUNTS, 'active_minutes'])
               .withColumn('duration_minutes', duration)
               .withColumn('chats_per_minute', F.when(duration > 0, F.col('chat_count') / duration))
-              .withColumn('max_gap_minutes', max_gap)
+              .withColumn('max_gap_minutes', max_gap.cast('double'))
               .withColumn('data_status', F.when(F.col('last_event_at').isNull(), 'NO_DATA')
                           .when(F.col('max_gap_minutes') >= GAP_MINUTES, 'CHECK_GAP').otherwise('OK')))
-    return result.drop('effective_end', 'max_inner_gap_minutes')
+    return result.drop('effective_end', 'first_minute', 'last_minute', 'last_event_minute', 'max_inner_gap')
 
 
 def write_manifest(gold_path, manifest):
@@ -260,7 +270,7 @@ def run(spark, silver_path, gold_path, control_db, now=None):
     minutes = minute_activity(events).cache()
     try:
         outputs = {'channel_minute_activity': minutes,
-                   'broadcast_sessions': broadcast_sessions(spark, events, minutes, sessions)}
+                   'broadcast_sessions': broadcast_sessions(spark, minutes, sessions)}
         for table, df in outputs.items():
             df.write.format('delta').mode('overwrite').option('overwriteSchema', 'true').save(f'{gold_path}/{table}')
     finally:
@@ -273,54 +283,48 @@ def run(spark, silver_path, gold_path, control_db, now=None):
 
 
 def refresh(spark, silver_path, gold_path, control_db, events=None, now=None):
-    """Recompute only the sessions (and session-less minutes) that new events or Collector records touched."""
+    """Rewrite only the minutes that new events or Collector records touched, then the sessions holding them.
+
+    Session rows come from minute rows, so an ongoing session without new events rereads no Silver at all.
+    """
     from pyspark.sql import functions as F
     now = now or datetime.now(timezone.utc)
-    if not (Path(gold_path) / 'broadcast_sessions' / '_delta_log').exists():
+    minutes_path, sessions_path = f'{gold_path}/channel_minute_activity', f'{gold_path}/broadcast_sessions'
+    # Minute rows written before session rows were built from them lack event times; rebuild everything once.
+    if (not (Path(sessions_path) / '_delta_log').exists()
+            or 'last_event_at' not in spark.read.format('delta').load(minutes_path).columns):
         return run(spark, silver_path, gold_path, control_db, now)
     sessions = read_sessions(control_db, now)
     stored = {r.session_id: {'record': (r.channel_id, r.started_us, r.ended_us, r.stop_reason, r.channel_name),
                              'events': (r.first_us, r.last_us)} for r in
-              spark.read.format('delta').load(f'{gold_path}/broadcast_sessions')
+              spark.read.format('delta').load(sessions_path)
               .select('session_id', 'channel_id', F.unix_micros('started_at').alias('started_us'),
                       F.unix_micros('ended_at').alias('ended_us'),
                       'stop_reason', 'channel_name', F.unix_micros('first_event_at').alias('first_us'),
                       F.unix_micros('last_event_at').alias('last_us')).collect()}
-    affected = changed_sessions(sessions, stored)
-    loose = {}
+    rebuilt = changed_sessions(sessions, stored)
+    ranges = {}
     if events is not None:
-        # Reduce in Spark: an empty checkpoint replays all of Silver, so collect one row per session or channel.
-        keys = (assign_sessions(spark, events.select('channel_id', 'event_time'), sessions)
-                .withColumn('minute_us', F.unix_micros(F.date_trunc('minute', 'event_time'))).cache())
-        try:
-            affected |= {r.session_id for r in keys.filter('session_id IS NOT NULL').select('session_id').distinct().collect()}
-            # Session-less minutes fold into one inclusive range per channel.
-            loose = {r.channel_id: (r.low, r.high) for r in keys.filter('session_id IS NULL').groupBy('channel_id')
-                     .agg(F.min('minute_us').alias('low'), F.max('minute_us').alias('high')).collect()}
-        finally:
-            keys.unpersist()
-    loose = widen_loose(loose, sessions, affected, stored)
-    minutes_where, sessions_where = replace_conditions(affected, loose)
-    if minutes_where is not None:
-        touched = [s for s in sessions if s['session_id'] in affected]
-        windows = [(s['channel_id'], s['started_at'], s['effective_end']) for s in touched]
-        windows += [(c, EPOCH + timedelta(microseconds=lo), EPOCH + timedelta(microseconds=hi) + timedelta(minutes=1))
-                    for c, (lo, hi) in loose.items()]
-        scoped = tagged_events(spark, silver_path, sessions, windows=windows).cache()
-        minutes = minute_activity(scoped).cache()
-        try:
-            # A loose range can also hold minutes of untouched sessions; keep only the keys being rewritten.
-            keep = F.col('session_id').isin(sorted(affected)) | (F.col('session_id').isNull() & F.expr(minutes_where))
-            (minutes.filter(keep).write.format('delta').mode('overwrite').option('replaceWhere', minutes_where)
-             .save(f'{gold_path}/channel_minute_activity'))
-            if sessions_where:
-                (broadcast_sessions(spark, scoped, minutes, touched).write.format('delta').mode('overwrite')
-                 .option('replaceWhere', sessions_where).save(f'{gold_path}/broadcast_sessions'))
-        finally:
-            minutes.unpersist()
-            scoped.unpersist()
+        # Reduce in Spark: an empty checkpoint replays all of Silver, so collect one row per channel.
+        # ponytail: one range per channel, so a late event rewrites every minute since it; split ranges if late events get common
+        minute = lambda c: F.unix_micros(F.date_trunc('minute', c))
+        ranges = {r.channel_id: (r.low, r.high) for r in events.groupBy('channel_id')
+                  .agg(minute(F.min('event_time')).alias('low'), minute(F.max('event_time')).alias('high')).collect()}
+    ranges = widen_ranges(ranges, sessions, rebuilt, stored)
+    # Live sessions get a new duration and trailing gap every trigger even when none of their minutes changed.
+    refreshed = rebuilt | overlapping(sessions, ranges) | {s['session_id'] for s in sessions if s['ended_at'] is None}
+    minutes_where, sessions_where = replace_conditions(refreshed, ranges)
+    if minutes_where:
+        windows = [(c, EPOCH + timedelta(microseconds=lo), EPOCH + timedelta(microseconds=hi) + timedelta(minutes=1))
+                   for c, (lo, hi) in ranges.items()]
+        (minute_activity(tagged_events(spark, silver_path, sessions, windows=windows)).write.format('delta')
+         .mode('overwrite').option('replaceWhere', minutes_where).save(minutes_path))
+    if sessions_where:
+        minutes = spark.read.format('delta').load(minutes_path).filter(F.col('session_id').isin(sorted(refreshed)))
+        (broadcast_sessions(spark, minutes, [s for s in sessions if s['session_id'] in refreshed]).write.format('delta')
+         .mode('overwrite').option('replaceWhere', sessions_where).save(sessions_path))
     manifest = {'mode': 'stream', 'computed_at': now.isoformat(), 'silver_path': silver_path,
-                'refreshed_sessions': sorted(affected), 'refreshed_loose_channels': sorted(loose),
+                'refreshed_sessions': sorted(refreshed), 'refreshed_channels': sorted(ranges),
                 'control_db_path': control_db, 'gap_minutes': GAP_MINUTES}
     write_manifest(gold_path, manifest)
     return manifest
@@ -330,7 +334,7 @@ def create_query(spark, settings, on_batch):
     """One stream over the four Silver tables; each micro-batch hands its new events to `on_batch`."""
     silver_path = settings.silver.output_path
     # Silver deletes rows only on rare business-key conflicts; skip those commits instead of failing the stream.
-    # Ongoing sessions are recomputed every trigger, so only ended sessions keep a skipped delete until --full.
+    # A skipped delete stays in Gold until a later event rewrites that minute or --full reconciles it.
     streams = [spark.readStream.format('delta').option('skipChangeCommits', 'true').load(f'{silver_path}/{t}')
                .select('channel_id', 'event_time') for t in SOURCES]
     events = reduce(lambda a, b: a.unionByName(b), streams)
@@ -355,9 +359,18 @@ def gold_lock(settings):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def create_gold_session(runtime):
+    from spark.kafka_raw_to_bronze import create_spark_session
+    spark = create_spark_session(runtime, kafka=False)
+    # The shared session turns these on for Bronze's small files. Gold rewrites a few rows per trigger, where the
+    # pre-write shuffle and post-commit compaction cost more than the write itself.
+    spark.conf.set('spark.databricks.delta.optimizeWrite.enabled', 'false')
+    spark.conf.set('spark.databricks.delta.autoCompact.enabled', 'false')
+    return spark
+
+
 def main(argv=None):
     from spark.bronze_to_silver import writer_lock
-    from spark.kafka_raw_to_bronze import create_spark_session
     settings = load_settings(argv)
     silver = settings.silver
     runtime = replace(silver.runtime, spark_app_name='chzzk-silver-to-gold')
@@ -366,14 +379,14 @@ def main(argv=None):
         if settings.full:
             # Holding the Silver writer lock keeps a Silver batch from landing between our table reads.
             with writer_lock(silver):
-                spark = create_spark_session(runtime, kafka=False)
+                spark = create_gold_session(runtime)
                 try:
                     manifest = run(spark, *args)
                 finally:
                     spark.stop()
             print('[spark-gold] ' + json.dumps(manifest), flush=True)
             return
-        spark = create_spark_session(runtime, kafka=False)
+        spark = create_gold_session(runtime)
         lock, last = threading.Lock(), [time.monotonic()]
         def refresh_once(events=None):
             # The stream thread (new events) and the timer below (ongoing/ended sessions) both write Gold.
