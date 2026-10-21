@@ -172,6 +172,21 @@ def main():
             assert refresh(spark,silver_path,gold_path,db,now=NOW)['mode']=='full'
             assert 'unique_chatters' not in table('broadcast_sessions').columns
             print('Gold written by the previous layout is rebuilt in full once.',flush=True)
+            # small_frame skips Python workers; it must still read rows as the list path does in any session time zone.
+            from spark.silver_to_gold import SESSION_SCHEMA,small_frame
+            start=datetime.fromtimestamp(MS/1000,timezone.utc)
+            rows=[{'session_id':1,'channel_id':'channel','channel_name':None,'started_at':start,'ended_at':None,
+                   'effective_end':start+timedelta(minutes=1),'stop_reason':None,'broadcast_date_kst':date(2026,9,23)}]
+            spark.conf.set('spark.sql.session.timeZone','Asia/Seoul')
+            try:
+                arrow,listed=small_frame(spark,rows,SESSION_SCHEMA),spark.createDataFrame(rows,SESSION_SCHEMA)
+                assert arrow.schema==listed.schema and arrow.collect()==listed.collect()
+                row=arrow.select('channel_name','ended_at',F.unix_micros('started_at').alias('us')).first()
+                assert row.us==MS*1000 and row.channel_name is None and row.ended_at is None, row
+                empty=small_frame(spark,[],SESSION_SCHEMA)
+                assert empty.count()==0 and empty.schema==listed.schema
+            finally:spark.conf.set('spark.sql.session.timeZone','UTC')
+            print('small_frame matches the list path across time zones, nulls and empty input.',flush=True)
     finally:spark.stop()
 
 
