@@ -165,6 +165,12 @@ def main():
              .option('overwriteSchema','true').save(f'{gold_path}/channel_minute_activity'))
             assert refresh(spark,silver_path,gold_path,db,now=NOW)['mode']=='full'
             assert 'last_event_at' in table('channel_minute_activity').columns
+            # A run that died between its two writes leaves new minute rows next to old session rows.
+            from pyspark.sql import functions as F
+            (table('broadcast_sessions').withColumn('unique_chatters',F.lit(0).cast('long')).write.format('delta')
+             .mode('overwrite').option('overwriteSchema','true').save(f'{gold_path}/broadcast_sessions'))
+            assert refresh(spark,silver_path,gold_path,db,now=NOW)['mode']=='full'
+            assert 'unique_chatters' not in table('broadcast_sessions').columns
             print('Gold written by the previous layout is rebuilt in full once.',flush=True)
     finally:spark.stop()
 

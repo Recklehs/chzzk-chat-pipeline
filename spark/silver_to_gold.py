@@ -290,9 +290,11 @@ def refresh(spark, silver_path, gold_path, control_db, events=None, now=None):
     from pyspark.sql import functions as F
     now = now or datetime.now(timezone.utc)
     minutes_path, sessions_path = f'{gold_path}/channel_minute_activity', f'{gold_path}/broadcast_sessions'
-    # Minute rows written before session rows were built from them lack event times; rebuild everything once.
+    # Gold from before session rows were built from minute rows lacks per-minute event times and still has the
+    # session-wide chatter count; rebuild everything once. run() writes minutes first, so check both tables.
     if (not (Path(sessions_path) / '_delta_log').exists()
-            or 'last_event_at' not in spark.read.format('delta').load(minutes_path).columns):
+            or 'last_event_at' not in spark.read.format('delta').load(minutes_path).columns
+            or 'unique_chatters' in spark.read.format('delta').load(sessions_path).columns):
         return run(spark, silver_path, gold_path, control_db, now)
     sessions = read_sessions(control_db, now)
     stored = {r.session_id: {'record': (r.channel_id, r.started_us, r.ended_us, r.stop_reason, r.channel_name),
