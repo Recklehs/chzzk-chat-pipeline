@@ -165,8 +165,7 @@ def apply_table_maintenance(
                 dry_run=dry_run,
             )
         )
-        if dry_run:
-            print(f"{table_path}: {result.count()} files to delete", flush=True)
+        print(f"{table_path}: {result.count()} files to delete" if dry_run else f"{table_path}: vacuumed", flush=True)
 
 
 def run_maintenance(
@@ -207,16 +206,24 @@ def run_maintenance(
         spark.stop()
 
 
-def build_cron_entry(project_root: Path, *, hour: int, minute: int, java_home: str | None = None) -> str:
+def build_cron_entry(
+    project_root: Path,
+    *,
+    hour: int,
+    minute: int,
+    java_home: str | None = None,
+    properties_file: Path | None = None,
+) -> str:
     root = project_root.resolve()
     python_bin = root / ".venv" / "bin" / "python"
     script_path = root / "spark" / "delta_maintenance.py"
     log_path = root / "data" / "logs" / "delta_maintenance.log"
     # cron starts without the shell's JAVA_HOME, so pin the JDK found when the entry is installed.
     java_env = f"SPARK_JAVA_HOME={shlex.quote(java_home)} " if java_home else ""
+    properties = f"--properties-file {shlex.quote(str(properties_file.resolve()))} " if properties_file else ""
     command = (
         f"cd {shlex.quote(str(root))} && "
-        f"{java_env}{shlex.quote(str(python_bin))} {shlex.quote(str(script_path))} run "
+        f"{java_env}{shlex.quote(str(python_bin))} {shlex.quote(str(script_path))} {properties}run "
         f">> {shlex.quote(str(log_path))} 2>&1"
     )
     return f"{minute} {hour} * * * {command} {CRON_MARKER}"
@@ -243,10 +250,12 @@ def read_existing_crontab() -> str:
     raise RuntimeError(f"Unable to read current crontab: {result.stderr.strip()}")
 
 
-def install_cron_entry(project_root: Path, *, hour: int, minute: int) -> str:
+def install_cron_entry(project_root: Path, *, hour: int, minute: int, properties_file: Path | None = None) -> str:
     log_dir = project_root / "data" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    entry = build_cron_entry(project_root, hour=hour, minute=minute, java_home=choose_java_home())
+    entry = build_cron_entry(
+        project_root, hour=hour, minute=minute, java_home=choose_java_home(), properties_file=properties_file
+    )
     updated = upsert_cron_entry(read_existing_crontab(), entry)
     subprocess.run(
         ["crontab", "-"],
@@ -295,7 +304,7 @@ def parse_args(argv: list[str] | None = None):
     run_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Run VACUUM in DRY RUN mode.",
+        help="Still apply retention properties, then run VACUUM in DRY RUN mode and print each table's file count.",
     )
 
     print_parser = subparsers.add_parser("print-cron", help="Print the managed cron entry.")
@@ -325,12 +334,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    properties_file = Path(args.properties_file) if args.properties_file else None
     if args.command == "print-cron":
-        print(build_cron_entry(project_root, hour=args.hour, minute=args.minute, java_home=choose_java_home()))
+        print(
+            build_cron_entry(
+                project_root,
+                hour=args.hour,
+                minute=args.minute,
+                java_home=choose_java_home(),
+                properties_file=properties_file,
+            )
+        )
         return 0
 
     if args.command == "install-cron":
-        print(install_cron_entry(project_root, hour=args.hour, minute=args.minute))
+        print(install_cron_entry(project_root, hour=args.hour, minute=args.minute, properties_file=properties_file))
         return 0
 
     raise AssertionError(f"Unsupported command: {args.command}")

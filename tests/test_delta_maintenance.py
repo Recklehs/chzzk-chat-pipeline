@@ -80,6 +80,8 @@ def test_build_cron_entry_uses_workspace_python_and_logfile():
     assert module.CRON_MARKER in entry
     assert "SPARK_JAVA_HOME" not in entry
     assert "&& SPARK_JAVA_HOME=/opt/jdk17 " in module.build_cron_entry(PROJECT_ROOT, hour=3, minute=0, java_home="/opt/jdk17")
+    pinned = module.build_cron_entry(PROJECT_ROOT, hour=3, minute=0, properties_file=Path("custom.properties"))
+    assert f"delta_maintenance.py --properties-file {Path('custom.properties').resolve()} run " in pinned
 
 
 def test_upsert_cron_entry_adds_or_replaces_single_managed_entry():
