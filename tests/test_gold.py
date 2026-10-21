@@ -4,8 +4,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from spark.silver_to_gold import (EPOCH, changed_sessions, load_settings, micros, read_sessions, replace_conditions,
-                                  seconds, widen_loose)
+from spark.silver_to_gold import (EPOCH, changed_sessions, load_settings, micros, overlapping, read_sessions,
+                                  replace_conditions, seconds, widen_ranges)
 
 NOW = datetime(2026, 9, 23, 5, 0, tzinfo=timezone.utc)
 
@@ -64,26 +64,26 @@ def test_back_to_back_sessions_and_missing_db(tmp_path):
         read_sessions(str(tmp_path / 'missing.db'), NOW)
 
 
-def test_refresh_targets_ongoing_new_and_changed_sessions_only():
+def test_rebuild_targets_new_and_changed_sessions_only():
     start, ended = datetime(2026, 9, 22, 17, 0, tzinfo=timezone.utc), datetime(2026, 9, 22, 18, 0, tzinfo=timezone.utc)
     def session(session_id, ended_at, reason='BROADCAST_ENDED', started_at=start, channel='a'):
         return {'session_id': session_id, 'channel_id': channel, 'started_at': started_at, 'ended_at': ended_at,
                 'stop_reason': reason, 'channel_name': 'name'}
-    sessions = [session(1, ended), session(2, None), session(3, ended), session(4, ended),
+    sessions = [session(1, ended), session(2, None, None), session(3, ended), session(4, ended),
                 session(5, ended, started_at=start + timedelta(minutes=5)), session(6, ended, channel='b')]
     stored = {i: {'record': ('a', micros(start), micros(ended), 'BROADCAST_ENDED', 'name')} for i in (1, 5, 6)}
     stored[2] = {'record': ('a', micros(start), None, None, 'name')}
     stored[4] = {'record': ('a', micros(start), micros(ended), 'SERVER_SHUTDOWN', 'name')}
-    # 1 is unchanged; 2 is live, 3 is not in Gold yet, 4 has a corrected end reason, 5 a corrected start,
-    # 6 a corrected channel.
-    assert changed_sessions(sessions, stored) == {2, 3, 4, 5, 6}
+    # 1 is unchanged and 2 is live with an unchanged record, so neither rereads Silver; 3 is not in Gold yet,
+    # 4 has a corrected end reason, 5 a corrected start, 6 a corrected channel.
+    assert changed_sessions(sessions, stored) == {3, 4, 5, 6}
 
     # The Collector reopens a closed session when the same broadcast reconnects: Gold stored an end, the record has
     # none now, so the session is rewritten as live again rather than kept as a finished broadcast.
     assert changed_sessions([session(1, None)], stored) == {1}
 
 
-def test_rewritten_sessions_also_rewrite_session_less_rows_their_boundaries_moved():
+def test_rebuilt_sessions_rewrite_every_minute_their_boundaries_moved():
     minute = 60_000_000
     def at(m):
         return EPOCH + timedelta(minutes=m)
@@ -92,22 +92,34 @@ def test_rewritten_sessions_also_rewrite_session_less_rows_their_boundaries_move
     sessions = [session(1, 'a', 10, 20), session(2, 'b', 100, 130), session(3, 'c', 0, 5)]
     # Session 1 used to reach a 25-minute event; its end moved to 20, so minutes up to 25 become session-less.
     stored = {1: {'events': (10 * minute, 25 * minute)}}
-    loose = widen_loose({'b': (90 * minute, 95 * minute)}, sessions, {1, 2}, stored)
-    assert loose == {'a': (10 * minute, 25 * minute), 'b': (90 * minute, 129 * minute)}
-    # Session 3 moved from channel 'old' to 'c': both channels' session-less rows in its span are rewritten.
+    ranges = widen_ranges({'b': (90 * minute, 95 * minute)}, sessions, {1, 2}, stored)
+    assert ranges == {'a': (10 * minute, 25 * minute), 'b': (90 * minute, 129 * minute)}
+    # Session 3 moved from channel 'old' to 'c': both channels' rows in its span are rewritten.
     stored[3] = {'record': ('old',), 'events': (minute, 3 * minute)}
-    assert widen_loose({}, sessions, {3}, stored) == {'c': (0, 4 * minute), 'old': (0, 4 * minute)}
+    assert widen_ranges({}, sessions, {3}, stored) == {'c': (0, 4 * minute), 'old': (0, 4 * minute)}
 
 
-def test_replace_conditions_cover_sessions_and_session_less_minute_ranges():
-    minutes, sessions = replace_conditions({2, 1}, {'abc': (60_000_000, 120_000_000)})
+def test_replace_conditions_cover_channel_minute_ranges_and_sessions():
+    minutes, sessions = replace_conditions({2, 1}, {'abc': (60_000_000, 120_000_000), 'd': (0, 0)})
     assert sessions == 'session_id IN (1, 2)'
-    assert minutes == ("session_id IN (1, 2) OR (session_id IS NULL AND ((channel_id = 'abc' AND minute_start "
-                       "BETWEEN timestamp_micros(60000000) AND timestamp_micros(120000000))))")
-    assert replace_conditions({3}, {}) == ('session_id IN (3)', 'session_id IN (3)')
+    assert minutes == ("(channel_id = 'abc' AND minute_start BETWEEN timestamp_micros(60000000) AND timestamp_micros(120000000))"
+                       " OR (channel_id = 'd' AND minute_start BETWEEN timestamp_micros(0) AND timestamp_micros(0))")
+    # A live session with no new events rewrites its session row only.
+    assert replace_conditions({3}, {}) == (None, 'session_id IN (3)')
     assert replace_conditions(set(), {}) == (None, None)
     with pytest.raises(ValueError, match='channel_id'):
         replace_conditions(set(), {"x' OR true --": (0, 0)})
+
+
+def test_sessions_holding_a_rewritten_minute_are_refreshed():
+    minute = 60_000_000
+    def session(session_id, channel, start, end):
+        return {'session_id': session_id, 'channel_id': channel, 'started_at': EPOCH + timedelta(minutes=start),
+                'effective_end': EPOCH + timedelta(minutes=end)}
+    # Range 'a' covers minutes 10 and 11. Session 2 ends 30 seconds into minute 10, session 3 starts at minute 12.
+    sessions = [session(1, 'a', 0, 9), session(2, 'a', 9, 10.5), session(3, 'a', 12, 20), session(4, 'b', 10, 11)]
+    assert overlapping(sessions, {'a': (10 * minute, 11 * minute)}) == {2}
+    assert overlapping(sessions, {}) == set()
 
 
 def test_trigger_intervals_fall_back_per_layer_and_paths_stay_apart(tmp_path):

@@ -1,6 +1,6 @@
 # Gold 실시간 갱신 방식 결정
 
-작성일: 2026-10-18. 상태: **채택, 구현 완료**(`spark/silver_to_gold.py`). 데이터 계약은 [Gold 계약](../gold-data-contract.md)에 있다. 그림 설명은 [방송 성적표 갱신](../explainers/gold-session-refresh.html)에 있다.
+작성일: 2026-10-18. 상태: **채택, 구현 완료**(`spark/silver_to_gold.py`). 진행 중인 회차를 처음부터 다시 계산하던 부분은 [분 단위 증분 갱신 결정](2026-10-21-gold-minute-incremental.md)(2026-10-21)으로 바뀌었다. 회차 전체 고유 참여자를 빼고, 회차 행을 분 단위 행에서 만든다. 데이터 계약은 [Gold 계약](../gold-data-contract.md)에 있다. 그림 설명은 [방송 성적표 갱신](../explainers/gold-session-refresh.html)에 있다.
 
 Gold를 어떻게 갱신할지 정하면서 검토한 선택지와 근거를 남긴다. 숫자는 2026-10-14~18 로컬 데이터(Bronze 프레임 88,129개, Silver 채팅 181,207건, 후원 710건, 방송 회차 8개)로 직접 측정하거나 실행한 결과다.
 

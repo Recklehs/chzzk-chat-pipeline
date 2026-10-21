@@ -210,8 +210,9 @@ const REFRESH_MS = {{ refresh_seconds }} * 1000;
 const METRICS = {
     chat: { label: '채팅', field: 'chat_count', color: '--accent', type: 'line',
             total: s => s.chat_count, sub: s => `클린봇이 가린 채팅 ${num(s.blinded_chat_count)}` },
+    // Gold counts chatters per minute only; a whole-broadcast count would make every refresh reread the broadcast.
     chatters: { label: '채팅한 사람', field: 'unique_chatters', color: '--blue', type: 'line', hourly: 'mean',
-                total: s => s.unique_chatters, sub: () => '한 번이라도 채팅한 계정 수' },
+                total: () => Math.max(0, ...detail.minutes.map(p => p.unique_chatters)), sub: () => '가장 많았던 1분 기준' },
     // Amount leads; the count is supporting detail. pay_type CURRENCY is shown in won (confirmed by the operator).
     donations: { label: '후원 금액', field: 'donation_amount_currency', color: '--gold', type: 'bar', unit: '원',
                  total: s => s.donation_amount_currency,
@@ -310,7 +311,7 @@ function channelList() {
         const rate = live.get(c.id);
         return { ...c, current, live: Boolean(current) || rate?.monitoring_status === 'monitoring', rate: rate?.recent_events_per_minute,
                  broadcasts: c.sessions.length, avgChats: withData.length ? sum('chat_count') / withData.length : null,
-                 avgChatters: withData.length ? sum('unique_chatters') / withData.length : null,
+                 avgMinutes: withData.length ? sum('duration_minutes') / withData.length : null,
                  donations: c.sessions.reduce((a, s) => a + s.donation_count, 0),
                  amount: c.sessions.reduce((a, s) => a + s.donation_amount_currency, 0), peak, last: c.sessions[0] };
     }).sort((a, b) => (b.live - a.live) || String(b.last?.started_at || '').localeCompare(String(a.last?.started_at || '')));
@@ -324,7 +325,7 @@ function broadcastRow(s, withAvatar) {
         <div class="title"><b>${withAvatar ? esc(c.name) : esc(day(s.broadcast_date_kst))} ${statusChip(s)}</b>
             <span class="num">${withAvatar ? esc(shortDay(s.broadcast_date_kst)) + ' · ' : ''}${time(s.started_at)}–${time(s.ended_at)} · ${hours(s.duration_minutes || 0)}</span></div>
         <div class="stat"><span>채팅</span><b class="num">${num(s.chat_count)}</b></div>
-        <div class="stat extra"><span>채팅한 사람</span><b class="num">${num(s.unique_chatters)}</b></div>
+        <div class="stat extra"><span>분당 채팅</span><b class="num">${num(s.chats_per_minute, 1)}</b></div>
         <div class="stat extra"><span>후원 금액</span><b class="num">${num(s.donation_amount_currency)}원</b> <small class="muted num">${num(s.donation_count)}건</small></div>
         ${sparkSvg(s.sparkline, s.data_status === 'NO_DATA' ? '--danger' : '--accent')}
     </a>`;
@@ -343,7 +344,7 @@ function renderHome() {
                 <a class="panel live-card clickable" href="${c.current ? broadcastHref(c.current) : channelHref(c.id)}" aria-label="${esc(c.name)} 방송 보기">
                     <div class="who">${avatar(c)}<div><b>${esc(c.name)}</b><span class="live-badge">LIVE</span></div></div>
                     <div class="rate"><strong class="num">${num(c.rate)}</strong><span class="muted">채팅/분 · 최근 1분</span></div>
-                    <div class="facts">${c.current ? `<span class="num">${time(c.current.started_at)}부터</span><span class="num">채팅 ${num(c.current.chat_count)}</span><span class="num">채팅한 사람 ${num(c.current.unique_chatters)}</span>` : '<span>집계 준비 중</span>'}</div>
+                    <div class="facts">${c.current ? `<span class="num">${time(c.current.started_at)}부터</span><span class="num">채팅 ${num(c.current.chat_count)}</span>` : '<span>집계 준비 중</span>'}</div>
                 </a>`).join('')}</div></section>` : ''}
         <section><div class="section-title"><h2>채널</h2><span>${channels.length}개</span></div>
             <div class="channel-grid">${channels.map(c => `
@@ -375,14 +376,14 @@ function renderChannel(id) {
         </section>
         <section class="kpis">
             <div class="panel kpi"><span class="label">방송당 평균 채팅</span><span class="value num">${num(c.avgChats)}</span><span class="sub">끝난 방송 중 채팅이 수집된 방송 기준</span></div>
-            <div class="panel kpi"><span class="label">방송당 평균 채팅한 사람</span><span class="value num">${num(c.avgChatters)}</span><span class="sub">방송마다 한 번씩 센 인원</span></div>
+            <div class="panel kpi"><span class="label">방송당 평균 길이</span><span class="value num">${c.avgMinutes == null ? '–' : hours(c.avgMinutes)}</span><span class="sub">끝난 방송 중 채팅이 수집된 방송 기준</span></div>
             <div class="panel kpi"><span class="label">지금까지 받은 후원 금액</span><span class="value num">${num(c.amount)}<small>원</small></span><span class="sub num">${num(c.donations)}건</span></div>
             <div class="panel kpi"><span class="label">가장 붐빈 순간</span><span class="value num">${num(c.peak?.peak_minute_chat_count)}<small>/분</small></span>
                 <span class="sub">${c.peak?.peak_minute_start ? `${esc(shortDay(c.peak.broadcast_date_kst))} ${time(c.peak.peak_minute_start)}` : '–'}</span></div>
         </section>
         <section class="panel chart-panel">
             <div class="section-title"><h2>방송별 채팅</h2><span>막대를 누르면 그 방송으로 이동해요</span></div>
-            <div class="chart-box"><canvas id="channel-chart" aria-label="방송별 채팅 수와 채팅한 사람"></canvas></div>
+            <div class="chart-box"><canvas id="channel-chart" aria-label="방송별 채팅 수"></canvas></div>
         </section>
         <section><div class="section-title"><h2>방송 기록</h2><span>최신순</span></div>
             <div class="recent">${c.sessions.map(s => broadcastRow(s, false)).join('') || '<div class="panel empty">아직 방송 기록이 없어요</div>'}</div></section>`;
@@ -393,17 +394,15 @@ function renderChannel(id) {
             labels: ordered.map(s => `${shortDay(s.broadcast_date_kst)} ${time(s.started_at)}`),
             datasets: [
                 { type: 'bar', label: '채팅', data: ordered.map(s => s.chat_count), backgroundColor: ordered.map(s => css(isLive(s) ? '--live' : '--accent')),
-                  borderRadius: 6, maxBarThickness: 44, yAxisID: 'y' },
-                { type: 'line', label: '채팅한 사람', data: ordered.map(s => s.unique_chatters), borderColor: css('--blue'), backgroundColor: css('--blue'),
-                  pointRadius: 3, tension: 0, yAxisID: 'y2' },
+                  borderRadius: 6, maxBarThickness: 44 },
             ],
         },
         options: {
             animation: false, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
             onClick: (_e, items) => { if (items.length) location.hash = broadcastHref(ordered[items[0].index]); },
             onHover: (e, items) => { e.native.target.style.cursor = items.length ? 'pointer' : 'default'; },
-            scales: { ...axisOptions(), y2: { beginAtZero: true, position: 'right', grid: { display: false }, ticks: { color: css('--muted'), precision: 0 } } },
-            plugins: { legend: { labels: { color: css('--ink'), boxWidth: 12 } }, tooltip: tooltipOptions() },
+            scales: axisOptions(),
+            plugins: { legend: { display: false }, tooltip: tooltipOptions() },
         },
     });
 }
@@ -532,7 +531,6 @@ function renderBroadcast() {
     const s = detail.session, m = METRICS[metric];
     const c = { id: s.channel_id, name: s.channel_name || s.channel_id, live: isLive(s) };
     const others = sessions.filter(x => x.channel_id === s.channel_id).slice(0, 8);
-    const perChatter = s.unique_chatters ? s.chat_count / s.unique_chatters : null;
     const slots = detail.minutes.length;  // the calendar minutes the chart covers
     // Counted from chat minutes here: Gold's active_minutes also counts minutes with only donations or subscriptions.
     const chatMinutes = detail.minutes.filter(p => p.chat_count > 0).length;
@@ -570,7 +568,7 @@ function renderBroadcast() {
         <section class="stats">
             <div class="panel stat-card"><span class="label">분당 채팅</span><span class="value num">${num(s.chats_per_minute, 1)}</span><span class="sub">방송 전체 평균</span></div>
             <div class="panel stat-card"><span class="label">가장 붐빈 순간</span><span class="value num">${s.peak_minute_start ? time(s.peak_minute_start) : '–'}</span><span class="sub">${s.peak_minute_chat_count ? `1분에 ${num(s.peak_minute_chat_count)}건` : '채팅 없음'}</span></div>
-            <div class="panel stat-card"><span class="label">1인당 채팅</span><span class="value num">${num(perChatter, 1)}</span><span class="sub">채팅 ÷ 채팅한 사람</span></div>
+            <div class="panel stat-card"><span class="label">가장 긴 빈 구간</span><span class="value num">${num(s.max_gap_minutes)}<small>분</small></span><span class="sub">채팅·후원·구독이 모두 없던 연속 시간</span></div>
             <div class="panel stat-card"><span class="label">채팅이 있던 시간</span><span class="value num">${coverage == null ? '–' : `${num(coverage)}%`}</span><span class="sub">${num(chatMinutes)}분 / ${num(slots)}분</span></div>
         </section>
         <section class="lower">
