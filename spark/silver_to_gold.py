@@ -361,9 +361,18 @@ def gold_lock(settings):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def create_gold_session(runtime):
+    from spark.kafka_raw_to_bronze import create_spark_session
+    spark = create_spark_session(runtime, kafka=False)
+    # The shared session turns these on for Bronze's small files. Gold rewrites a few rows per trigger, where the
+    # pre-write shuffle and post-commit compaction cost more than the write itself.
+    spark.conf.set('spark.databricks.delta.optimizeWrite.enabled', 'false')
+    spark.conf.set('spark.databricks.delta.autoCompact.enabled', 'false')
+    return spark
+
+
 def main(argv=None):
     from spark.bronze_to_silver import writer_lock
-    from spark.kafka_raw_to_bronze import create_spark_session
     settings = load_settings(argv)
     silver = settings.silver
     runtime = replace(silver.runtime, spark_app_name='chzzk-silver-to-gold')
@@ -372,14 +381,14 @@ def main(argv=None):
         if settings.full:
             # Holding the Silver writer lock keeps a Silver batch from landing between our table reads.
             with writer_lock(silver):
-                spark = create_spark_session(runtime, kafka=False)
+                spark = create_gold_session(runtime)
                 try:
                     manifest = run(spark, *args)
                 finally:
                     spark.stop()
             print('[spark-gold] ' + json.dumps(manifest), flush=True)
             return
-        spark = create_spark_session(runtime, kafka=False)
+        spark = create_gold_session(runtime)
         lock, last = threading.Lock(), [time.monotonic()]
         def refresh_once(events=None):
             # The stream thread (new events) and the timer below (ongoing/ended sessions) both write Gold.
