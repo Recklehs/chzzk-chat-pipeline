@@ -2,8 +2,11 @@ import importlib
 import os
 import plistlib
 import stat
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -89,6 +92,33 @@ def test_build_launchd_plist_runs_workspace_python_daily_into_logfile():
     ))
     assert pinned["EnvironmentVariables"] == {"SPARK_JAVA_HOME": "/opt/jdk17"}
     assert pinned["ProgramArguments"][2:] == ["--properties-file", str(Path("custom.properties").resolve()), "run"]
+
+
+def test_install_launchd_agent_writes_plist_then_retries_bootstrap_until_loaded(monkeypatch, tmp_path):
+    module = load_module()
+    plist_path = tmp_path / "LaunchAgents" / f"{module.LAUNCHD_LABEL}.plist"
+    calls = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command[:2])
+        # The old agent is still going away for the first two bootstrap calls.
+        failed = command[1] == "bootout" or calls.count(["launchctl", "bootstrap"]) < 3
+        return subprocess.CompletedProcess(command, 5 if failed else 0, "", "Input/output error")
+
+    monkeypatch.setattr(module, "LAUNCHD_PLIST", plist_path)
+    monkeypatch.setattr(module, "choose_java_home", lambda: "/opt/jdk17")
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    assert module.install_launchd_agent(tmp_path, hour=3, minute=0) == plist_path
+    assert plistlib.loads(plist_path.read_bytes())["EnvironmentVariables"] == {"SPARK_JAVA_HOME": "/opt/jdk17"}
+    assert calls == [["launchctl", "bootout"], *[["launchctl", "bootstrap"]] * 3]
+
+    monkeypatch.setattr(module.subprocess, "run", lambda command, **_kwargs: subprocess.CompletedProcess(
+        command, 5, "", "Input/output error"
+    ))
+    with pytest.raises(RuntimeError, match="not loaded: Input/output error"):
+        module.install_launchd_agent(tmp_path, hour=3, minute=0)
 
 
 def test_apply_table_maintenance_sets_changed_retention_and_vacuums_each_table():

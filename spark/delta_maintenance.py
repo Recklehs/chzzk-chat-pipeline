@@ -3,6 +3,7 @@ import os
 import plistlib
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +21,7 @@ DEFAULT_SCHEDULE_HOUR = 3
 DEFAULT_SCHEDULE_MINUTE = 0
 LAUNCHD_LABEL = "com.chzzk.delta-vacuum"
 LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+BOOTSTRAP_ATTEMPTS = 10
 
 
 def project_root_from_path(path: str | Path | None = None) -> Path:
@@ -246,8 +248,19 @@ def install_launchd_agent(project_root: Path, *, hour: int, minute: int, propert
     domain = f"gui/{os.getuid()}"
     # bootout fails when the agent is not loaded yet; bootstrap then loads the new plist.
     subprocess.run(["launchctl", "bootout", f"{domain}/{LAUNCHD_LABEL}"], capture_output=True, check=False)
-    subprocess.run(["launchctl", "bootstrap", domain, str(LAUNCHD_PLIST)], check=True)
-    return LAUNCHD_PLIST
+    # bootout can return before the old agent is gone, and bootstrap then fails with "5: Input/output error".
+    for attempt in range(BOOTSTRAP_ATTEMPTS):
+        result = subprocess.run(
+            ["launchctl", "bootstrap", domain, str(LAUNCHD_PLIST)], text=True, capture_output=True, check=False
+        )
+        if result.returncode == 0:
+            return LAUNCHD_PLIST
+        if attempt < BOOTSTRAP_ATTEMPTS - 1:
+            time.sleep(0.5)
+    raise RuntimeError(
+        f"launchctl bootstrap failed after {BOOTSTRAP_ATTEMPTS} attempts, so the agent is not loaded: "
+        f"{result.stderr.strip()}"
+    )
 
 
 def parse_args(argv: list[str] | None = None):

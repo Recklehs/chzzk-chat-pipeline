@@ -337,7 +337,7 @@ launchctl print gui/$(id -u)/com.chzzk.delta-vacuum | head     # 등록 확인
 launchctl kickstart gui/$(id -u)/com.chzzk.delta-vacuum         # 예약과 같은 방식으로 지금 한 번 실행
 ```
 
-- 예약은 `~/Library/LaunchAgents/com.chzzk.delta-vacuum.plist` launchd 에이전트입니다. cron과 달리 맥이 잠든 사이 지나간 03:00 실행을 깨어난 뒤 한 번 돌립니다. cron은 놓친 실행을 그냥 건너뛰어서 노트북에서는 정리가 빠졌습니다.
+- 예약은 `~/Library/LaunchAgents/com.chzzk.delta-vacuum.plist` launchd 에이전트입니다. cron과 달리 맥이 잠든 사이 지나간 03:00 실행을 깨어난 뒤 한 번 돌립니다. cron은 놓친 실행을 그냥 건너뛰어서 노트북에서는 정리가 빠졌습니다. 예전에 `install-cron`으로 등록했다면 같은 시각에 두 번 돌지 않게 옛 줄을 지우세요: `crontab -l | grep -v chzzk-delta-vacuum | crontab -`.
 - launchd는 셸의 `JAVA_HOME`을 물려받지 않으므로 `install-launchd`가 등록할 때 찾은 JDK를 `SPARK_JAVA_HOME`으로 plist에 넣습니다. JDK를 바꾸면 다시 등록하세요. 등록 내용은 `print-launchd`로 미리 볼 수 있습니다.
 
 - 보존 기간: Bronze·Silver는 지운 파일 7일·로그 30일, Gold는 둘 다 1일입니다. Gold는 10초마다 행을 다시 쓰고 `--full`로 다시 만들 수 있어 길게 보존할 이유가 없습니다. Silver와 Gold의 스트림 체크포인트가 각각 Bronze·Silver 버전을 가리키므로, 스트림을 7일 넘게 멈출 계획이 아니라면 Bronze·Silver 보존 기간을 줄이지 마세요.
