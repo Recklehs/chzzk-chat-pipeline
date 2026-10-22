@@ -1,5 +1,6 @@
 import importlib
 import os
+import plistlib
 import stat
 import sys
 from pathlib import Path
@@ -68,35 +69,26 @@ def test_configure_spark_java_prefers_discovered_jdk17_when_current_java_home_is
     assert os.environ["PATH"].split(os.pathsep)[0] == str(compatible_java_home / "bin")
 
 
-def test_build_cron_entry_uses_workspace_python_and_logfile():
+def test_build_launchd_plist_runs_workspace_python_daily_into_logfile():
     module = load_module()
 
-    entry = module.build_cron_entry(PROJECT_ROOT, hour=3, minute=0)
+    job = plistlib.loads(module.build_launchd_plist(PROJECT_ROOT, hour=3, minute=0))
 
-    assert entry.startswith("0 3 * * * ")
-    assert str(PROJECT_ROOT / ".venv" / "bin" / "python") in entry
-    assert str(PROJECT_ROOT / "spark" / "delta_maintenance.py") in entry
-    assert str(PROJECT_ROOT / "data" / "logs" / "delta_maintenance.log") in entry
-    assert module.CRON_MARKER in entry
-    assert "SPARK_JAVA_HOME" not in entry
-    assert "&& SPARK_JAVA_HOME=/opt/jdk17 " in module.build_cron_entry(PROJECT_ROOT, hour=3, minute=0, java_home="/opt/jdk17")
-    pinned = module.build_cron_entry(PROJECT_ROOT, hour=3, minute=0, properties_file=Path("custom.properties"))
-    assert f"delta_maintenance.py --properties-file {Path('custom.properties').resolve()} run " in pinned
+    assert job["Label"] == module.LAUNCHD_LABEL
+    assert job["ProgramArguments"] == [
+        str(PROJECT_ROOT / ".venv" / "bin" / "python"), str(PROJECT_ROOT / "spark" / "delta_maintenance.py"), "run"
+    ]
+    assert job["WorkingDirectory"] == str(PROJECT_ROOT)
+    assert job["StartCalendarInterval"] == {"Hour": 3, "Minute": 0}
+    log_path = str(PROJECT_ROOT / "data" / "logs" / "delta_maintenance.log")
+    assert job["StandardOutPath"] == job["StandardErrorPath"] == log_path
+    assert "EnvironmentVariables" not in job
 
-
-def test_upsert_cron_entry_adds_or_replaces_single_managed_entry():
-    module = load_module()
-    existing = "MAILTO=\"\"\n15 1 * * * echo already-here\n"
-    first = "0 3 * * * /tmp/first # marker"
-    second = "30 4 * * * /tmp/second # marker"
-
-    updated = module.upsert_cron_entry(existing, first, marker="# marker")
-    replaced = module.upsert_cron_entry(updated, second, marker="# marker")
-
-    assert "15 1 * * * echo already-here" in replaced
-    assert first not in replaced
-    assert replaced.count("# marker") == 1
-    assert second in replaced
+    pinned = plistlib.loads(module.build_launchd_plist(
+        PROJECT_ROOT, hour=3, minute=0, java_home="/opt/jdk17", properties_file=Path("custom.properties")
+    ))
+    assert pinned["EnvironmentVariables"] == {"SPARK_JAVA_HOME": "/opt/jdk17"}
+    assert pinned["ProgramArguments"][2:] == ["--properties-file", str(Path("custom.properties").resolve()), "run"]
 
 
 def test_apply_table_maintenance_sets_changed_retention_and_vacuums_each_table():

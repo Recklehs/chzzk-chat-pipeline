@@ -1,6 +1,6 @@
 import argparse
 import os
-import shlex
+import plistlib
 import subprocess
 import sys
 from pathlib import Path
@@ -16,9 +16,10 @@ DEFAULT_LOG_RETENTION = "interval 30 days"
 GOLD_DELETED_FILE_RETENTION = "interval 1 days"
 GOLD_LOG_RETENTION = "interval 1 days"
 DEFAULT_PROPERTIES_FILE = Path("spark") / "conf" / "local.properties"
-DEFAULT_CRON_HOUR = 3
-DEFAULT_CRON_MINUTE = 0
-CRON_MARKER = "# chzzk-delta-vacuum"
+DEFAULT_SCHEDULE_HOUR = 3
+DEFAULT_SCHEDULE_MINUTE = 0
+LAUNCHD_LABEL = "com.chzzk.delta-vacuum"
+LAUNCHD_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
 
 
 def project_root_from_path(path: str | Path | None = None) -> Path:
@@ -206,64 +207,47 @@ def run_maintenance(
         spark.stop()
 
 
-def build_cron_entry(
+def build_launchd_plist(
     project_root: Path,
     *,
     hour: int,
     minute: int,
     java_home: str | None = None,
     properties_file: Path | None = None,
-) -> str:
+) -> bytes:
     root = project_root.resolve()
-    python_bin = root / ".venv" / "bin" / "python"
-    script_path = root / "spark" / "delta_maintenance.py"
-    log_path = root / "data" / "logs" / "delta_maintenance.log"
-    # cron starts without the shell's JAVA_HOME, so pin the JDK found when the entry is installed.
-    java_env = f"SPARK_JAVA_HOME={shlex.quote(java_home)} " if java_home else ""
-    properties = f"--properties-file {shlex.quote(str(properties_file.resolve()))} " if properties_file else ""
-    command = (
-        f"cd {shlex.quote(str(root))} && "
-        f"{java_env}{shlex.quote(str(python_bin))} {shlex.quote(str(script_path))} {properties}run "
-        f">> {shlex.quote(str(log_path))} 2>&1"
+    log_path = str(root / "data" / "logs" / "delta_maintenance.log")
+    properties = ["--properties-file", str(properties_file.resolve())] if properties_file else []
+    job = {
+        "Label": LAUNCHD_LABEL,
+        "ProgramArguments": [
+            str(root / ".venv" / "bin" / "python"), str(root / "spark" / "delta_maintenance.py"), *properties, "run"
+        ],
+        "WorkingDirectory": str(root),
+        # Unlike cron, launchd runs a calendar job missed during sleep once the Mac wakes.
+        "StartCalendarInterval": {"Hour": hour, "Minute": minute},
+        "StandardOutPath": log_path,
+        "StandardErrorPath": log_path,
+    }
+    # launchd starts without the shell's JAVA_HOME, so pin the JDK found when the agent is installed.
+    if java_home:
+        job["EnvironmentVariables"] = {"SPARK_JAVA_HOME": java_home}
+    return plistlib.dumps(job)
+
+
+def install_launchd_agent(project_root: Path, *, hour: int, minute: int, properties_file: Path | None = None) -> Path:
+    (project_root / "data" / "logs").mkdir(parents=True, exist_ok=True)
+    LAUNCHD_PLIST.parent.mkdir(parents=True, exist_ok=True)
+    LAUNCHD_PLIST.write_bytes(
+        build_launchd_plist(
+            project_root, hour=hour, minute=minute, java_home=choose_java_home(), properties_file=properties_file
+        )
     )
-    return f"{minute} {hour} * * * {command} {CRON_MARKER}"
-
-
-def upsert_cron_entry(existing: str, entry: str, *, marker: str = CRON_MARKER) -> str:
-    lines = [line for line in existing.splitlines() if marker not in line]
-    lines.append(entry)
-    return "\n".join(lines).strip() + "\n"
-
-
-def read_existing_crontab() -> str:
-    result = subprocess.run(
-        ["crontab", "-l"],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        return result.stdout
-    stderr = result.stderr.lower()
-    if result.returncode == 1 and ("no crontab" in stderr or "crontab file not found" in stderr):
-        return ""
-    raise RuntimeError(f"Unable to read current crontab: {result.stderr.strip()}")
-
-
-def install_cron_entry(project_root: Path, *, hour: int, minute: int, properties_file: Path | None = None) -> str:
-    log_dir = project_root / "data" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    entry = build_cron_entry(
-        project_root, hour=hour, minute=minute, java_home=choose_java_home(), properties_file=properties_file
-    )
-    updated = upsert_cron_entry(read_existing_crontab(), entry)
-    subprocess.run(
-        ["crontab", "-"],
-        input=updated,
-        text=True,
-        check=True,
-    )
-    return entry
+    domain = f"gui/{os.getuid()}"
+    # bootout fails when the agent is not loaded yet; bootstrap then loads the new plist.
+    subprocess.run(["launchctl", "bootout", f"{domain}/{LAUNCHD_LABEL}"], capture_output=True, check=False)
+    subprocess.run(["launchctl", "bootstrap", domain, str(LAUNCHD_PLIST)], check=True)
+    return LAUNCHD_PLIST
 
 
 def parse_args(argv: list[str] | None = None):
@@ -271,7 +255,7 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument(
         "--project-root",
         default=str(project_root_from_path()),
-        help="Absolute project root for the cron entry and the default properties file.",
+        help="Absolute project root for the launchd agent and the default properties file.",
     )
     parser.add_argument(
         "--properties-file",
@@ -307,13 +291,13 @@ def parse_args(argv: list[str] | None = None):
         help="Still apply retention properties, then run VACUUM in DRY RUN mode and print each table's file count.",
     )
 
-    print_parser = subparsers.add_parser("print-cron", help="Print the managed cron entry.")
-    print_parser.add_argument("--hour", type=int, default=DEFAULT_CRON_HOUR)
-    print_parser.add_argument("--minute", type=int, default=DEFAULT_CRON_MINUTE)
+    print_parser = subparsers.add_parser("print-launchd", help="Print the managed launchd agent plist.")
+    print_parser.add_argument("--hour", type=int, default=DEFAULT_SCHEDULE_HOUR)
+    print_parser.add_argument("--minute", type=int, default=DEFAULT_SCHEDULE_MINUTE)
 
-    install_parser = subparsers.add_parser("install-cron", help="Install or replace the managed cron entry.")
-    install_parser.add_argument("--hour", type=int, default=DEFAULT_CRON_HOUR)
-    install_parser.add_argument("--minute", type=int, default=DEFAULT_CRON_MINUTE)
+    install_parser = subparsers.add_parser("install-launchd", help="Install or replace the managed launchd agent.")
+    install_parser.add_argument("--hour", type=int, default=DEFAULT_SCHEDULE_HOUR)
+    install_parser.add_argument("--minute", type=int, default=DEFAULT_SCHEDULE_MINUTE)
 
     return parser.parse_args(argv)
 
@@ -335,20 +319,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     properties_file = Path(args.properties_file) if args.properties_file else None
-    if args.command == "print-cron":
-        print(
-            build_cron_entry(
-                project_root,
-                hour=args.hour,
-                minute=args.minute,
-                java_home=choose_java_home(),
-                properties_file=properties_file,
-            )
+    if args.command == "print-launchd":
+        plist = build_launchd_plist(
+            project_root,
+            hour=args.hour,
+            minute=args.minute,
+            java_home=choose_java_home(),
+            properties_file=properties_file,
         )
+        print(plist.decode(), end="")
         return 0
 
-    if args.command == "install-cron":
-        print(install_cron_entry(project_root, hour=args.hour, minute=args.minute, properties_file=properties_file))
+    if args.command == "install-launchd":
+        print(install_launchd_agent(project_root, hour=args.hour, minute=args.minute, properties_file=properties_file))
         return 0
 
     raise AssertionError(f"Unsupported command: {args.command}")
