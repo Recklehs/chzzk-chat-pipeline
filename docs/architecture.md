@@ -160,7 +160,7 @@ Silver의 실행 진입점은 [spark/bronze_to_silver.py](../spark/bronze_to_sil
 | Kafka + UI | [kafka/compose.yaml](../kafka/compose.yaml) | 단일 브로커와 관리 UI, Kafka 로그 볼륨 |
 | 재생 벤치마크 | `collector/benchmark_input.py`, `benchmark_replay.py`, `benchmark_matrix.py` | 입력 생성 → 실제 수신·발행 코드 재생 → 반복 측정 |
 | 관측 도구 | [kafka/compose.benchmark.yaml](../kafka/compose.benchmark.yaml) | 선택 실행: Prometheus·Grafana·cAdvisor·Kafka JMX exporter |
-| Delta 유지보수 | [spark/delta_maintenance.py](../spark/delta_maintenance.py) | cron으로 실행하는 보존기간/VACUUM 도구. properties 경로로 프레임 Bronze·Silver·Gold 테이블을 찾고, Gold는 보존 기간 1일, 나머지는 7일(로그 30일) |
+| Delta 유지보수 | [spark/delta_maintenance.py](../spark/delta_maintenance.py) | launchd로 매일 실행하는 보존기간/VACUUM 도구. properties 경로로 프레임 Bronze·Silver·Gold 테이블을 찾고, Gold는 보존 기간 1일, 나머지는 7일(로그 30일) |
 | 컨테이너 이미지 발행 | [.github/workflows/docker-image.yml](../.github/workflows/docker-image.yml) | main push 시 Collector 이미지를 GHCR에 발행. 전체 시스템을 자동 배포하는 구성은 아님 |
 | 선택·이전 경로 | Pub/Sub publisher/bootstrap/watcher, GCS용 dev/prod properties | 코드에 남아 있으나 현재 Kafka+로컬 기본 흐름에서는 사용하지 않음 |
 | 호환 진입점 | `chzzk_control.py`, `kafka_raw_publisher.py` | collector 모듈을 재노출하는 얇은 파일 |
