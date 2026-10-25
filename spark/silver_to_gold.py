@@ -36,6 +36,7 @@ COUNTS = ('chat_count', 'blinded_chat_count', 'donation_count', 'anonymous_donat
 SESSION_SCHEMA = ('session_id long, channel_id string, channel_name string, started_at timestamp, '
                   'ended_at timestamp, effective_end timestamp, stop_reason string, broadcast_date_kst date')
 CHANNEL_ID = re.compile(r'[0-9A-Za-z_-]+')
+GOLD_JVM = {'spark.driver.memory': '4g', 'spark.driver.extraJavaOptions': '-XX:G1HeapRegionSize=8m'}
 
 
 @dataclass(frozen=True)
@@ -377,6 +378,9 @@ def gold_lock(settings):
 
 def create_gold_session(runtime):
     from spark.kafka_raw_to_bronze import create_spark_session
+    # The default 1 GB heap has 1 MB G1 regions, so Spark's 4 MB broadcast chunks are humongous and kept G1 marking
+    # about once a second (#16). The JVM reads these only at launch; the properties file still wins.
+    runtime = replace(runtime, spark_properties={**GOLD_JVM, **runtime.spark_properties})
     spark = create_spark_session(runtime, kafka=False)
     # The shared session turns these on for Bronze's small files. Gold rewrites a few rows per trigger, where the
     # pre-write shuffle and post-commit compaction cost more than the write itself.
