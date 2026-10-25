@@ -182,10 +182,9 @@ def test_default_tables_follow_frame_layout_with_short_gold_retention(tmp_path):
 
     tables = module.default_tables(properties)
 
-    keep = ("interval 7 days", "interval 30 days")
     assert tables == [
-        (frames / "bronze", *keep),
-        (frames / "silver" / "chat_messages", *keep),
-        (frames / "silver" / "donations", *keep),
-        (frames / "gold" / "broadcast_sessions", "interval 1 days", "interval 1 days"),
+        (frames / "bronze", "interval 7 days", "interval 30 days"),
+        (frames / "silver" / "chat_messages", "interval 7 days", "interval 1 days"),
+        (frames / "silver" / "donations", "interval 7 days", "interval 1 days"),
+        (frames / "gold" / "broadcast_sessions", "interval 1 days", "interval 1 hours"),
     ]

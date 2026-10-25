@@ -12,10 +12,15 @@ if str(PROJECT_ROOT) not in sys.path:
 
 DEFAULT_DELETED_FILE_RETENTION = "interval 7 days"
 DEFAULT_LOG_RETENTION = "interval 30 days"
-# Gold rewrites its rows every trigger and can be rebuilt with `silver_to_gold.py --full`, so a week of replaced
-# files buys nothing. Bronze and Silver keep the defaults: Silver and Gold stream checkpoints point at their versions.
+# Delta lists a table's whole _delta_log on every snapshot update, so a local log of 10-second commits costs
+# driver CPU in proportion to its length (#16). Cleanup rounds its cutoff down to UTC midnight, so the logs keep
+# since that midnight (Gold) or the one before (Silver). Gold's stream reads Silver versions: a Gold stream stopped
+# longer than a day restarts from a fresh checkpoint, whose first batch replays all of Silver. Silver's stream reads
+# Bronze, which keeps 30 days.
+SILVER_LOG_RETENTION = "interval 1 days"
+# Gold rewrites its rows every trigger, nothing streams from it, and `silver_to_gold.py --full` rebuilds it.
 GOLD_DELETED_FILE_RETENTION = "interval 1 days"
-GOLD_LOG_RETENTION = "interval 1 days"
+GOLD_LOG_RETENTION = "interval 1 hours"
 DEFAULT_PROPERTIES_FILE = Path("spark") / "conf" / "local.properties"
 DEFAULT_SCHEDULE_HOUR = 3
 DEFAULT_SCHEDULE_MINUTE = 0
@@ -44,9 +49,9 @@ def default_tables(properties_file: str | Path) -> list[tuple[Path, str, str]]:
     from spark.silver_to_gold import load_settings
 
     settings = load_settings(["--properties-file", str(properties_file)])
-    keep = (DEFAULT_DELETED_FILE_RETENTION, DEFAULT_LOG_RETENTION)
     return [
-        *((path, *keep) for path in delta_tables(settings.silver.bronze_path, settings.silver.output_path)),
+        *((path, DEFAULT_DELETED_FILE_RETENTION, DEFAULT_LOG_RETENTION) for path in delta_tables(settings.silver.bronze_path)),
+        *((path, DEFAULT_DELETED_FILE_RETENTION, SILVER_LOG_RETENTION) for path in delta_tables(settings.silver.output_path)),
         *((path, GOLD_DELETED_FILE_RETENTION, GOLD_LOG_RETENTION) for path in delta_tables(settings.gold_path)),
     ]
 

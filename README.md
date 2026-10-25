@@ -340,7 +340,10 @@ launchctl kickstart gui/$(id -u)/com.chzzk.delta-vacuum         # 예약과 같�
 - 예약은 `~/Library/LaunchAgents/com.chzzk.delta-vacuum.plist` launchd 에이전트입니다. cron과 달리 맥이 잠든 사이 지나간 03:00 실행을 깨어난 뒤 한 번 돌립니다. cron은 놓친 실행을 그냥 건너뛰어서 노트북에서는 정리가 빠졌습니다. 예전에 `install-cron`으로 등록했다면 같은 시각에 두 번 돌지 않게 옛 줄을 지우세요: `crontab -l | grep -v chzzk-delta-vacuum | crontab -`.
 - launchd는 셸의 `JAVA_HOME`을 물려받지 않으므로 `install-launchd`가 등록할 때 찾은 JDK를 `SPARK_JAVA_HOME`으로 plist에 넣습니다. JDK를 바꾸면 다시 등록하세요. 등록 내용은 `print-launchd`로 미리 볼 수 있습니다.
 
-- 보존 기간: Bronze·Silver는 지운 파일 7일·로그 30일, Gold는 둘 다 1일입니다. Gold는 10초마다 행을 다시 쓰고 `--full`로 다시 만들 수 있어 길게 보존할 이유가 없습니다. Silver와 Gold의 스트림 체크포인트가 각각 Bronze·Silver 버전을 가리키므로, 스트림을 7일 넘게 멈출 계획이 아니라면 Bronze·Silver 보존 기간을 줄이지 마세요.
+- 보존 기간: Bronze는 지운 파일 7일·로그 30일, Silver는 지운 파일 7일·로그 1일, Gold는 지운 파일 1일·로그 1시간입니다. 로컬 Delta는 표를 열 때마다 `_delta_log` 디렉터리 전체를 읽습니다. 그래서 10초마다 커밋하는 Silver·Gold는 로그가 길수록 Gold 갱신의 드라이버 CPU가 늘어납니다(#16).
+- Delta는 로그 정리 기준 시각을 UTC 자정으로 내려 잡습니다. 그래서 실제로는 Gold 로그가 그날 UTC 자정(09:00 KST)부터, Silver 로그가 그 전날 UTC 자정부터 남습니다. 정리는 각 스트림이 체크포인트를 쓸 때(10커밋마다) 일어납니다.
+- Gold 스트림 체크포인트는 Silver 버전을 가리킵니다. Gold를 하루 넘게 멈췄다가 켜면 그 버전의 로그가 지워져 `DELTA_MISSING_FILES_UNEXPECTED_VERSION` 오류로 멈춥니다. 이때는 Gold 스트림을 멈춘 채 `gold_checkpoint`를 지우고 다시 시작합니다. 첫 마이크로배치가 Silver 전체를 다시 읽어 Gold를 다시 씁니다(로컬 데이터 기준 약 10초).
+- Silver 스트림 체크포인트는 Bronze 버전을 가리키므로, Silver를 7일 넘게 멈출 계획이 아니라면 Bronze 보존 기간을 줄이지 마세요.
 - 기본 설정 파일은 `spark/conf/local.properties`이고 `--properties-file`로 바꿀 수 있습니다(`delta_maintenance.py --properties-file <파일> install-launchd`처럼 명령 앞에 둡니다). `install-launchd`에 지정하면 그 절대 경로가 plist에 고정됩니다. 상대 경로를 쓰므로 저장소 루트에서 실행합니다(launchd 에이전트도 루트에서 실행합니다). 실행 로그는 `data/logs/delta_maintenance.log`이고, 테이블마다 `<경로>: vacuumed` 줄이 남습니다.
 - 보존 기간 속성은 값이 다를 때만 바꿉니다. 속성 변경은 메타데이터 커밋이라 그 순간 실행 중인 스트림의 쓰기와 충돌할 수 있으므로, 처음 한 번은 스트림을 멈춘 상태에서 실행하는 편이 안전합니다.
 - 다른 테이블만 정리하려면 `run --table-path <경로>`를 반복해 지정합니다. 이때는 `--deleted-file-retention`, `--log-retention` 값이 적용됩니다.
