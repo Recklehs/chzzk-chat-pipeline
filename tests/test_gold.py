@@ -139,3 +139,20 @@ def test_trigger_intervals_fall_back_per_layer_and_paths_stay_apart(tmp_path):
     props.write_text(props.read_text() + f'app.gold.checkpoint.path={base}/gold/checkpoint\n')
     with pytest.raises(ValueError, match='overlap'):
         load_settings(['--properties-file', str(props)])
+
+
+def test_gold_session_gets_a_bigger_heap_unless_properties_set_one(monkeypatch):
+    import spark.kafka_raw_to_bronze as bronze
+    from spark.kafka_raw_to_bronze import RuntimeSettings
+    from spark.silver_to_gold import create_gold_session
+    launched = []
+
+    class FakeSpark:
+        conf = type('Conf', (), {'set': lambda self, key, value: None})()
+
+    monkeypatch.setattr(bronze, 'create_spark_session', lambda runtime, kafka: launched.append(runtime) or FakeSpark())
+    create_gold_session(RuntimeSettings(spark_properties={'spark.sql.shuffle.partitions': '4'}))
+    create_gold_session(RuntimeSettings(spark_properties={'spark.driver.memory': '2g'}))
+    assert launched[0].spark_properties == {'spark.driver.memory': '4g', 'spark.sql.shuffle.partitions': '4',
+                                            'spark.driver.extraJavaOptions': '-XX:G1HeapRegionSize=8m'}
+    assert launched[1].spark_properties['spark.driver.memory'] == '2g'
